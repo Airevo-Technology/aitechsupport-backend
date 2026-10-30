@@ -361,9 +361,12 @@ def widget_chat(
         raise HTTPException(status_code=429, detail="Busy right now — please retry shortly.",
                             headers={"Retry-After": "5"})
     except Exception:  # noqa: BLE001 — upstream embedding/LLM/network failure
+        # 503 (not 502) so the widget shows its "assistant unavailable" copy rather
+        # than a generic "something went wrong" — e.g. every chat model rate-limited.
         logger.exception("widget chat failed for bot %s", bot.id)
-        raise HTTPException(status_code=502,
-                            detail="The assistant is temporarily unavailable. Please try again.")
+        raise HTTPException(status_code=503,
+                            detail="The assistant is temporarily unavailable. Please try again.",
+                            headers={"Retry-After": "30"})
 
     if tokens:
         billing.record_usage(db, channel.organization_id, tokens)
