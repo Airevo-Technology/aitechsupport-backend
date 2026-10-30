@@ -34,7 +34,7 @@ CHAT_MODELS: list[dict] = [
     {"id": "anthropic/claude-sonnet-4.5", "label": "Claude Sonnet 4.5", "provider": "Anthropic"},
     {"id": "openai/gpt-5.4-mini", "label": "GPT-5.4 Mini", "provider": "OpenAI"},
     {"id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B", "provider": "OpenAI (open)"},
-    {"id": "openai/gpt-oss-20b:free", "label": "GPT-OSS 20B (free)", "provider": "OpenAI (open)"},
+    {"id": "openai/gpt-oss-20b", "label": "GPT-OSS 20B", "provider": "OpenAI (open)"},
     {"id": "mistralai/mistral-small", "label": "Mistral Small", "provider": "Mistral"},
 ]
 
@@ -54,15 +54,18 @@ def default_model() -> str:
 
 
 # The platform's reliability chain when no admin override is configured yet:
-# two self-hosted boxes, then a free OpenRouter model as a last resort so a
-# customer-facing chat never hard-fails just because one GPU box is down.
+# two self-hosted boxes, then cheap-then-reliable paid OpenRouter models as a last
+# resort so a customer-facing chat never hard-fails just because one GPU box is
+# down. (OpenRouter's :free slugs get rate-limited or withdrawn without notice.)
 DEFAULT_FALLBACK_CHAIN: list[dict] = [
     {"label": "black", "provider": "self_hosted",
      "base_url": "http://100.102.172.23:11434", "model": "qwen3.5:9b-q4_K_M"},
     {"label": "ai-server", "provider": "self_hosted",
      "base_url": "http://100.101.148.46:11434", "model": "qwen3.5:4b-q4_K_M"},
-    {"label": "openrouter-free", "provider": "openrouter",
-     "base_url": None, "model": "openai/gpt-oss-20b:free"},
+    {"label": "GPT-OSS 120B", "provider": "openrouter",
+     "base_url": None, "model": "openai/gpt-oss-120b"},
+    {"label": "Claude Haiku", "provider": "openrouter",
+     "base_url": None, "model": "anthropic/claude-haiku-4.5"},
 ]
 
 
