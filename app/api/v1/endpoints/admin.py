@@ -4,7 +4,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -20,6 +20,8 @@ from app.models.payment import Payment
 from app.models.email_template import EmailTemplate
 from app.models.page import Page
 from app.models.channel import Channel
+from app.models.conversation import Conversation
+from app.models.knowledge import KnowledgeSource
 from app.core import attachments
 from app.schemas.content import HomepageUpdate, PageAdminOut, PageCreate, PageUpdate
 from app.schemas.setting import SettingsUpdate, SettingsOut
@@ -29,6 +31,11 @@ from app.schemas.billing import (
     PackageOut,
     PackageUpsert,
     ClientRow,
+    ClientsPage,
+    ClientDetail,
+    ClientUserRow,
+    ClientBotRow,
+    ClientPaymentRow,
     SubscribeRequest,
     BillplzSettingsOut,
     BillplzSettingsUpdate,
@@ -349,6 +356,176 @@ def list_clients(db: Session = Depends(get_db), admin: User = Depends(get_platfo
             )
         )
     return rows
+
+
+def _iso(dt: datetime | None) -> str | None:
+    return dt.isoformat() if dt else None
+
+
+@router.get("/clients/paged", response_model=ClientsPage)
+def list_clients_paged(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    q: str | None = Query(default=None, description="Search org name or owner email"),
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_platform_admin),
+) -> ClientsPage:
+    query = db.query(Organization)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        owner_org_ids = db.query(User.organization_id).filter(
+            User.role == "owner", User.email.ilike(like)
+        )
+        query = query.filter(or_(Organization.name.ilike(like), Organization.id.in_(owner_org_ids)))
+    total = query.count()
+    orgs = (
+        query.order_by(Organization.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    ids = [o.id for o in orgs]
+    subs = {s.organization_id: s for s in db.query(Subscription).filter(Subscription.organization_id.in_(ids)).all()} if ids else {}
+    quotas = {p.slug: p.monthly_token_quota for p in db.query(Package).all()}
+    owners: dict[int, str] = {}
+    if ids:
+        for u in db.query(User).filter(User.role == "owner", User.organization_id.in_(ids)).order_by(User.id).all():
+            owners.setdefault(u.organization_id, u.email)
+    bot_counts = dict(
+        db.query(Bot.organization_id, func.count(Bot.id))
+        .filter(Bot.organization_id.in_(ids))
+        .group_by(Bot.organization_id)
+        .all()
+    ) if ids else {}
+    items = []
+    for org in orgs:
+        sub = subs.get(org.id)
+        plan = sub.plan if sub else "free"
+        items.append(
+            ClientRow(
+                organization_id=org.id,
+                organization_name=org.name,
+                owner_email=owners.get(org.id),
+                plan=plan,
+                tokens_used=(sub.tokens_used if sub else 0) or 0,
+                tokens_quota=quotas.get(plan, 0),
+                bots=bot_counts.get(org.id, 0),
+                created_at=_iso(org.created_at),
+                start_date=_iso(sub.start_date) if sub else None,
+                next_billing_date=_iso(sub.next_billing_date) if sub else None,
+            )
+        )
+    return ClientsPage(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.get("/clients/{organization_id}", response_model=ClientDetail)
+def get_client_detail(
+    organization_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_platform_admin),
+) -> ClientDetail:
+    """Read-only overview of one organization for the platform admin."""
+    org = db.query(Organization).filter(Organization.id == organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Client not found")
+    sub = db.query(Subscription).filter(Subscription.organization_id == organization_id).first()
+    plan = sub.plan if sub else "free"
+    pkg = db.query(Package).filter(Package.slug == plan).first()
+    users = (
+        db.query(User).filter(User.organization_id == organization_id).order_by(User.id).all()
+    )
+    owner = next((u for u in users if u.role == "owner"), None)
+    bots = db.query(Bot).filter(Bot.organization_id == organization_id).order_by(Bot.id).all()
+    source_counts = dict(
+        db.query(KnowledgeSource.bot_id, func.count(KnowledgeSource.id))
+        .filter(KnowledgeSource.organization_id == organization_id)
+        .group_by(KnowledgeSource.bot_id)
+        .all()
+    )
+    channel_kinds: dict[int, list[str]] = {}
+    for ch in db.query(Channel).filter(Channel.organization_id == organization_id).all():
+        channel_kinds.setdefault(ch.bot_id, []).append(ch.kind)
+    conv_total, conv_human, conv_last = (
+        db.query(
+            func.count(Conversation.id),
+            func.count(Conversation.needs_human_at),
+            func.max(Conversation.last_message_at),
+        )
+        .filter(Conversation.organization_id == organization_id)
+        .one()
+    )
+    payments = (
+        db.query(Payment)
+        .filter(Payment.organization_id == organization_id)
+        .order_by(Payment.id.desc())
+        .limit(20)
+        .all()
+    )
+    return ClientDetail(
+        client=ClientRow(
+            organization_id=org.id,
+            organization_name=org.name,
+            owner_email=owner.email if owner else None,
+            plan=plan,
+            tokens_used=(sub.tokens_used if sub else 0) or 0,
+            tokens_quota=pkg.monthly_token_quota if pkg else 0,
+            bots=len(bots),
+            created_at=_iso(org.created_at),
+            start_date=_iso(sub.start_date) if sub else None,
+            next_billing_date=_iso(sub.next_billing_date) if sub else None,
+        ),
+        subscription_status=sub.status if sub else "active",
+        messages_used=(sub.messages_used if sub else 0) or 0,
+        period_start=_iso(sub.period_start) if sub else None,
+        last_reminder_sent=_iso(sub.last_reminder_sent) if sub else None,
+        support_email=org.support_email,
+        support_whatsapp=org.support_whatsapp,
+        conversations=conv_total or 0,
+        conversations_needing_human=conv_human or 0,
+        last_conversation_at=_iso(conv_last),
+        users=[
+            ClientUserRow(
+                id=u.id,
+                email=u.email,
+                full_name=u.full_name,
+                phone=u.phone,
+                role=u.role,
+                is_active=u.is_active,
+                is_email_verified=u.is_email_verified,
+                last_seen_at=_iso(u.last_seen_at),
+                created_at=_iso(u.created_at),
+            )
+            for u in users
+        ],
+        bots=[
+            ClientBotRow(
+                id=b.id,
+                name=b.name,
+                is_active=b.is_active,
+                chat_model=b.chat_model,
+                handoff_mode=b.handoff_mode,
+                whatsapp_number=b.whatsapp_number,
+                knowledge_sources=source_counts.get(b.id, 0),
+                channels=sorted(set(channel_kinds.get(b.id, []))),
+                created_at=_iso(b.created_at),
+            )
+            for b in bots
+        ],
+        payments=[
+            ClientPaymentRow(
+                id=p.id,
+                plan_slug=p.plan_slug,
+                amount_cents=p.amount_cents,
+                method=p.method,
+                status=p.status,
+                sandbox=p.sandbox,
+                reference_note=p.reference_note,
+                paid_at=_iso(p.paid_at),
+                created_at=_iso(p.created_at),
+            )
+            for p in payments
+        ],
+    )
 
 
 @router.put("/clients/{organization_id}/plan", response_model=ClientRow)

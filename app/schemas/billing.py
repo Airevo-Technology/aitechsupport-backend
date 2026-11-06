@@ -78,6 +78,65 @@ class ClientRow(BaseModel):
     next_billing_date: str | None = None
 
 
+class ClientsPage(BaseModel):
+    items: list[ClientRow]
+    total: int
+    page: int
+    page_size: int
+
+
+class ClientUserRow(BaseModel):
+    id: int
+    email: str
+    full_name: str | None = None
+    phone: str | None = None
+    role: str
+    is_active: bool
+    is_email_verified: bool
+    last_seen_at: str | None = None
+    created_at: str | None = None
+
+
+class ClientBotRow(BaseModel):
+    id: int
+    name: str
+    is_active: bool
+    chat_model: str | None = None
+    handoff_mode: str
+    whatsapp_number: str | None = None
+    knowledge_sources: int
+    channels: list[str]
+    created_at: str | None = None
+
+
+class ClientPaymentRow(BaseModel):
+    id: int
+    plan_slug: str
+    amount_cents: int
+    method: str
+    status: str
+    sandbox: bool
+    reference_note: str | None = None
+    paid_at: str | None = None
+    created_at: str | None = None
+
+
+class ClientDetail(BaseModel):
+    client: ClientRow
+    subscription_status: str
+    messages_used: int
+    period_start: str | None = None
+    last_reminder_sent: str | None = None
+    support_email: str | None = None
+    support_whatsapp: str | None = None
+    conversations: int
+    conversations_needing_human: int
+    last_conversation_at: str | None = None
+    users: list[ClientUserRow]
+    bots: list[ClientBotRow]
+    payments: list[ClientPaymentRow]
+
+
 class SetBillingCycleRequest(BaseModel):
     start_date: str  # ISO date/datetime; next_billing_date = start_date + 30 days
 
