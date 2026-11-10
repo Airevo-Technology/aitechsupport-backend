@@ -50,6 +50,25 @@ class SubscriptionOut(BaseModel):
     max_bots: int
     period_start: str | None = None
     next_billing_date: str | None = None
+    # 0-100: % off every paid checkout/renewal from active paid referrals.
+    referral_discount_percent: int = 0
+
+
+class ReferralItem(BaseModel):
+    name: str  # masked, e.g. "Ac***"
+    joined: str
+    plan: str
+    counts: bool  # on an active paid plan today -> earns the referrer 10%
+
+
+class ReferralOut(BaseModel):
+    code: str
+    link: str
+    percent_each: int
+    active_referrals: int
+    total_referrals: int
+    discount_percent: int
+    referrals: list[ReferralItem]
 
 
 class SubscribeRequest(BaseModel):

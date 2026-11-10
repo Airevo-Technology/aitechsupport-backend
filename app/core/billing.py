@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import secrets
 from datetime import datetime, timedelta
 
 import httpx
@@ -24,6 +25,7 @@ from app.models.subscription import Subscription
 from app.models.package import Package
 from app.models.payment import Payment
 from app.models.channel import Channel
+from app.models.organization import Organization
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +123,97 @@ def roll_billing_period(sub: Subscription) -> None:
     base = sub.next_billing_date if sub.next_billing_date and sub.next_billing_date > now else now
     sub.start_date = sub.start_date or now
     sub.next_billing_date = base + timedelta(days=PERIOD_DAYS)
+
+
+# ===== Referral program =====
+# Each referred organization that is on an active paid plan takes 10% off the
+# referrer's price at every paid checkout/renewal (capped at 100%). The discount
+# is baked into Payment.amount_cents at checkout, so gateways and webhooks charge
+# and verify exactly what the client saw. At 100% no gateway is involved at all.
+
+REFERRAL_PERCENT_EACH = 10
+REFERRAL_GRACE_DAYS = 7  # a lapsed renewal stops counting after this long
+_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/1/I
+
+
+def ensure_referral_code(db: Session, org: Organization) -> str:
+    if org.referral_code:
+        return org.referral_code
+    for _ in range(10):
+        code = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(8))
+        if not db.query(Organization.id).filter(Organization.referral_code == code).first():
+            org.referral_code = code
+            db.commit()
+            return code
+    raise RuntimeError("could not generate a referral code")
+
+
+def organization_by_referral_code(db: Session, code: str | None) -> Organization | None:
+    code = (code or "").strip().upper()
+    if not code:
+        return None
+    return db.query(Organization).filter(Organization.referral_code == code).first()
+
+
+def _is_paying(db: Session, sub: Subscription | None) -> bool:
+    """On a paid plan, active, and not lapsed beyond the grace period."""
+    if sub is None or sub.status != "active":
+        return False
+    pkg = package_for(db, sub.plan)
+    if pkg is None or pkg.price_myr <= 0:
+        return False
+    if sub.next_billing_date and sub.next_billing_date < datetime.utcnow() - timedelta(days=REFERRAL_GRACE_DAYS):
+        return False
+    return True
+
+
+def referral_list(db: Session, organization_id: int) -> list[dict]:
+    """Every org this one referred, newest first, with whether it counts today."""
+    rows = (
+        db.query(Organization)
+        .filter(Organization.referred_by_organization_id == organization_id)
+        .order_by(Organization.created_at.desc())
+        .all()
+    )
+    out = []
+    for o in rows:
+        sub = db.query(Subscription).filter(Subscription.organization_id == o.id).first()
+        out.append({"organization": o, "counts": _is_paying(db, sub), "plan": sub.plan if sub else "free"})
+    return out
+
+
+def referral_discount_percent(db: Session, organization_id: int) -> int:
+    n = sum(1 for r in referral_list(db, organization_id) if r["counts"])
+    return min(100, n * REFERRAL_PERCENT_EACH)
+
+
+def net_price_cents(db: Session, organization_id: int, package: Package) -> int:
+    """What this org pays for `package` now, in minor units, after its referral discount."""
+    gross = int(package.price_myr) * 100
+    pct = referral_discount_percent(db, organization_id)
+    return gross * (100 - pct) // 100
+
+
+def activate_without_payment(db: Session, organization_id: int, package: Package) -> Subscription:
+    """A fully referral-discounted period: record a zero-value paid Payment (audit
+    trail) and activate/roll the plan with no gateway."""
+    payment = Payment(
+        organization_id=organization_id,
+        plan_slug=package.slug,
+        amount_cents=0,
+        currency=billing_currency(),
+        method="referral",
+        status="paid",
+        sandbox=False,
+        paid_at=datetime.utcnow(),
+    )
+    db.add(payment)
+    sub = subscribe(db, organization_id, package)
+    roll_billing_period(sub)
+    db.commit()
+    db.refresh(sub)
+    logger.info("referral-covered period: plan %s for org %s", package.slug, organization_id)
+    return sub
 
 
 # ===== Billplz payment gateway =====
@@ -240,7 +333,7 @@ def create_checkout_bill(
         raise RuntimeError("Billing is not configured")
     cfg = billplz_config(db)
     base = billplz_api_base(cfg["sandbox"])
-    amount_cents = int(package.price_myr) * 100
+    amount_cents = net_price_cents(db, organization_id, package)
 
     payment = Payment(
         organization_id=organization_id,
@@ -382,7 +475,7 @@ def create_paypal_checkout(
     payment = Payment(
         organization_id=organization_id,
         plan_slug=package.slug,
-        amount_cents=int(package.price_myr) * 100,
+        amount_cents=net_price_cents(db, organization_id, package),
         currency=currency,
         method="paypal",
         status="pending",
@@ -501,7 +594,7 @@ def report_bank_transfer(
     payment = Payment(
         organization_id=organization_id,
         plan_slug=package.slug,
-        amount_cents=int(package.price_myr) * 100,
+        amount_cents=net_price_cents(db, organization_id, package),
         currency=billing_currency(),
         method="bank_transfer",
         status="pending",

@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.api.deps import get_current_user
 from app.core import billing, paypal, storage, email as email_service
 from app.models.user import User
+from app.core.settings import settings
 from app.models.organization import Organization
 from app.models.package import Package
 from app.schemas.billing import (
@@ -21,6 +22,8 @@ from app.schemas.billing import (
     GatewaysOut,
     PayPalCaptureRequest,
     PayPalCaptureOut,
+    ReferralItem,
+    ReferralOut,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +55,7 @@ def _subscription_out(db: Session, sub) -> SubscriptionOut:
         max_bots=pkg.max_bots if pkg else 1,
         period_start=sub.period_start.isoformat() if sub.period_start else None,
         next_billing_date=sub.next_billing_date.isoformat() if sub.next_billing_date else None,
+        referral_discount_percent=billing.referral_discount_percent(db, sub.organization_id),
     )
 
 
@@ -110,6 +114,11 @@ def checkout(payload: SubscribeRequest, db: Session = Depends(get_db), user: Use
         sub = billing.subscribe(db, user.organization_id, pkg)
         return CheckoutOut(subscription=_subscription_out(db, sub))
 
+    # Fully covered by referral discount: nothing to collect, activate directly.
+    if billing.net_price_cents(db, user.organization_id, pkg) == 0:
+        sub = billing.activate_without_payment(db, user.organization_id, pkg)
+        return CheckoutOut(subscription=_subscription_out(db, sub))
+
     # Paid plan — pick the gateway. Billplz collects MYR only; PayPal covers the rest.
     avail = billing.available_gateways(db)
     gateway = payload.gateway or ("billplz" if avail["billplz"] else "paypal" if avail["paypal"] else None)
@@ -133,6 +142,32 @@ def checkout(payload: SubscribeRequest, db: Session = Depends(get_db), user: Use
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=f"Could not start checkout: {exc}")
     return CheckoutOut(payment_url=url, bill_id=payment.billplz_bill_id)
+
+
+@router.get("/referral", response_model=ReferralOut)
+def my_referrals(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """The caller's referral link, discount earned so far and who they referred."""
+    org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+    code = billing.ensure_referral_code(db, org)
+    rows = billing.referral_list(db, user.organization_id)
+    active = sum(1 for r in rows if r["counts"])
+    return ReferralOut(
+        code=code,
+        link=f"{settings.FRONTEND_URL}/register?ref={code}",
+        percent_each=billing.REFERRAL_PERCENT_EACH,
+        active_referrals=active,
+        total_referrals=len(rows),
+        discount_percent=min(100, active * billing.REFERRAL_PERCENT_EACH),
+        referrals=[
+            ReferralItem(
+                name=(r["organization"].name[:2] + "***"),
+                joined=r["organization"].created_at.isoformat() if r["organization"].created_at else "",
+                plan=r["plan"],
+                counts=r["counts"],
+            )
+            for r in rows
+        ],
+    )
 
 
 @router.get("/gateways", response_model=GatewaysOut)
@@ -222,6 +257,9 @@ def report_bank_transfer(
     if not billing.bank_transfer_is_configured(db):
         raise HTTPException(status_code=503, detail="Bank transfer isn't enabled — contact us to activate a paid plan.")
 
+    if billing.net_price_cents(db, user.organization_id, pkg) == 0:
+        raise HTTPException(status_code=400, detail="Nothing to pay - your referral discount covers this period. Use Renew instead.")
+
     org = db.query(Organization).filter(Organization.id == user.organization_id).first()
     try:
         payment = billing.report_bank_transfer(
@@ -234,6 +272,6 @@ def report_bank_transfer(
     email_service.send_template_bg(
         user.email,
         "bank_transfer_reported",
-        {"name": org.name if org else user.email, "plan": pkg.name, "amount": f"{pkg.price_myr:.2f}"},
+        {"name": org.name if org else user.email, "plan": pkg.name, "amount": f"{payment.amount_cents / 100:.2f}"},
     )
     return BankTransferReportOut(payment_id=payment.id, status=payment.status)

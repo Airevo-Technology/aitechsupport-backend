@@ -56,12 +56,19 @@ def _unique_org_slug(db: Session, name: str) -> str:
     return slug
 
 
+def _referrer_id(db: Session, code: str | None) -> int | None:
+    """Org id behind a referral code; unknown/blank codes are ignored, never an error."""
+    ref = billing.organization_by_referral_code(db, code)
+    return ref.id if ref else None
+
+
 @router.post("/register", response_model=Token, status_code=201)
 def register(payload: RegisterRequest, background: BackgroundTasks, db: Session = Depends(get_db)) -> Token:
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
 
     org = Organization(name=payload.organization_name, slug=_unique_org_slug(db, payload.organization_name))
+    org.referred_by_organization_id = _referrer_id(db, payload.referral_code)
     db.add(org)
     db.flush()  # assign org.id before creating the user
 
@@ -113,6 +120,7 @@ def checkout_signup(payload: CheckoutSignupRequest, background: BackgroundTasks,
         raise HTTPException(status_code=404, detail="Plan not found")
 
     org = Organization(name=payload.organization_name.strip(), slug=_unique_org_slug(db, payload.organization_name))
+    org.referred_by_organization_id = _referrer_id(db, payload.referral_code)
     db.add(org)
     db.flush()  # assign org.id before creating the user
 

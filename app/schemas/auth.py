@@ -7,6 +7,7 @@ class RegisterRequest(BaseModel):
     password: str
     full_name: str | None = None
     phone: str | None = None
+    referral_code: str | None = None
 
 
 class Token(BaseModel):
@@ -44,6 +45,7 @@ class CheckoutSignupRequest(BaseModel):
     full_name: str | None = None
     phone: str | None = None
     plan_slug: str
+    referral_code: str | None = None
 
 
 class UpdateProfileRequest(BaseModel):
