@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.setting import Setting
 from app.models.page import Page
+from app.core.settings import market
 
 HOMEPAGE_KEY = "homepage_content"
 
@@ -26,7 +27,7 @@ DEFAULT_HOMEPAGE: dict = {
         {"icon": "chat", "title": "Website widget in one line", "text": "Paste a single <script> tag. A polished chat bubble appears on your site instantly, styled to match your brand."},
         {"icon": "user", "title": "Live human handoff", "text": "When the bot can't help, a real person takes over the conversation live from the dashboard or the mobile app."},
         {"icon": "shield", "title": "Your data, self-hosted", "text": "Inference runs on our own servers — your customers' questions never leave our infrastructure."},
-        {"icon": "globe", "title": "Multilingual", "text": "Understands and replies in Bahasa Melayu, English, Chinese and more."},
+        {"icon": "globe", "title": "Multilingual", "text": "Understands and replies in English, Bahasa Melayu, Chinese and more."},
         {"icon": "chart", "title": "Analytics built in", "text": "See what customers ask, your deflection rate, and unanswered questions to feed back into the bot."},
     ],
     "pricing": {"heading": "Simple, transparent pricing", "subhead": "Start free. Upgrade when you grow."},
@@ -40,6 +41,18 @@ DEFAULT_HOMEPAGE: dict = {
     "footer": {"tagline": "AI support chatbot for Malaysian businesses.", "social": []},
     "demo_public_key": "",  # optional widget public_key for the live homepage demo
 }
+
+# Per-market overrides applied on top of the shared defaults (MARKET=au).
+_AU_OVERRIDES = {
+    "footer": {"tagline": "AI support chatbot for Australian businesses.", "social": []},
+}
+if market() == "au":
+    DEFAULT_HOMEPAGE.update(_AU_OVERRIDES)
+    DEFAULT_HOMEPAGE["features"] = [
+        {**f, "text": "Understands and replies in English and the languages your customers speak, including Mandarin, Cantonese, Vietnamese and more."}
+        if f["icon"] == "globe" else f
+        for f in DEFAULT_HOMEPAGE["features"]
+    ]
 
 DEFAULT_PAGES: list[dict] = [
     {

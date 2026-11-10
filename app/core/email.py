@@ -32,7 +32,10 @@ _TAG_RE = re.compile(r"<[^>]+>")
 # footer, container) is applied here in code so every email is consistent and
 # admins only edit the content.
 BRAND_NAME = "AiChatSupport"
-BRAND_URL = "https://aichatsupport.my"
+from app.core.settings import site_url as _site_url
+
+BRAND_URL = _site_url()
+BRAND_HOST = BRAND_URL.split("://", 1)[-1]
 BRAND_ACCENT = "#4f46e5"
 _FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 
@@ -89,7 +92,7 @@ def wrap_email(inner_html: str, preheader: str = "") -> str:
         f'<p style="margin:0 0 4px;font-family:{_FONT};font-size:12px;line-height:1.6;color:#94a3b8;">'
         f'{BRAND_NAME} — AI customer support for your website &amp; WhatsApp.</p>'
         f'<p style="margin:0;font-family:{_FONT};font-size:12px;line-height:1.6;color:#94a3b8;">'
-        f'<a href="{BRAND_URL}" style="color:{BRAND_ACCENT};text-decoration:none;">aichatsupport.my</a>'
+        f'<a href="{BRAND_URL}" style="color:{BRAND_ACCENT};text-decoration:none;">{BRAND_HOST}</a>'
         f'&nbsp;·&nbsp;© {year} {BRAND_NAME}, built by Airevo.</p>'
         '</td></tr></table></td></tr></table></body></html>'
     )

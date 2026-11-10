@@ -8,6 +8,7 @@ PDF/office formats are a later addition (needs extra deps) — see PROJECT_STATE
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 from urllib.parse import urlparse
 
@@ -16,7 +17,7 @@ from bs4 import BeautifulSoup
 
 from app.core.settings import settings
 
-_UA = "AiChatSupportBot/0.1 (+https://aichatsupport.my)"
+_UA = f"AiChatSupportBot/0.1 (+{os.getenv('SITE_URL', 'https://aichatsupport.my').rstrip('/')})"
 _STRIP_TAGS = ["script", "style", "noscript", "nav", "header", "footer", "svg", "form", "iframe"]
 
 
