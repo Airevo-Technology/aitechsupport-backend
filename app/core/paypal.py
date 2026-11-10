@@ -25,13 +25,29 @@ def _as_bool(raw: str, default: bool) -> bool:
     return raw.strip().lower() in ("true", "1", "yes", "on")
 
 
-def config() -> dict:
+def config_both() -> dict:
+    """Both credential sets (for the admin page) plus the enabled/sandbox switches."""
     g = config_store.get
     return {
         "enabled": _as_bool(g("PAYPAL_ENABLED"), False),
         "sandbox": _as_bool(g("PAYPAL_SANDBOX"), True),
-        "client_id": g("PAYPAL_CLIENT_ID"),
-        "client_secret": g("PAYPAL_CLIENT_SECRET"),
+        # Legacy single-pair keys were only ever live credentials.
+        "live_client_id": (g("PAYPAL_LIVE_CLIENT_ID") or g("PAYPAL_CLIENT_ID") or "").strip(),
+        "live_client_secret": (g("PAYPAL_LIVE_CLIENT_SECRET") or g("PAYPAL_CLIENT_SECRET") or "").strip(),
+        "sandbox_client_id": (g("PAYPAL_SANDBOX_CLIENT_ID") or "").strip(),
+        "sandbox_client_secret": (g("PAYPAL_SANDBOX_CLIENT_SECRET") or "").strip(),
+    }
+
+
+def config() -> dict:
+    """The active credential pair, chosen by the sandbox switch."""
+    both = config_both()
+    mode = "sandbox" if both["sandbox"] else "live"
+    return {
+        "enabled": both["enabled"],
+        "sandbox": both["sandbox"],
+        "client_id": both[f"{mode}_client_id"],
+        "client_secret": both[f"{mode}_client_secret"],
     }
 
 
@@ -70,9 +86,21 @@ def _request(method: str, path: str, json: dict | None = None) -> dict:
     return resp.json() if resp.content else {}
 
 
-def check_credentials() -> None:
-    """Raises PayPalError if the stored credentials can't obtain a token."""
-    _access_token(config())
+def check_credentials(mode: str | None = None) -> None:
+    """Raises PayPalError if the stored credentials can't obtain a token.
+
+    `mode` ("sandbox" | "live") tests that saved pair against its own PayPal
+    environment regardless of which one is active; None tests the active pair."""
+    if mode is None:
+        _access_token(config())
+        return
+    if mode not in ("sandbox", "live"):
+        raise PayPalError("mode must be 'sandbox' or 'live'")
+    both = config_both()
+    cfg = {"sandbox": mode == "sandbox", "client_id": both[f"{mode}_client_id"], "client_secret": both[f"{mode}_client_secret"]}
+    if not (cfg["client_id"] and cfg["client_secret"]):
+        raise PayPalError(f"No {mode} credentials saved yet.")
+    _access_token(cfg)
 
 
 def create_order(*, amount_cents: int, currency: str, description: str, custom_id: str,

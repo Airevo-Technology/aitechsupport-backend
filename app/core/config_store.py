@@ -80,6 +80,12 @@ MANAGED_KEYS = {
     # PayPal (international card/PayPal collections, e.g. Australia)
     "PAYPAL_ENABLED": "PAYPAL_ENABLED",          # "true" | "false"
     "PAYPAL_SANDBOX": "PAYPAL_SANDBOX",          # "true" | "false"
+    # Separate PayPal apps for sandbox and live; PAYPAL_SANDBOX picks which pair is used.
+    # PAYPAL_CLIENT_ID/SECRET are the pre-split names and only count as the LIVE pair.
+    "PAYPAL_LIVE_CLIENT_ID": "PAYPAL_LIVE_CLIENT_ID",
+    "PAYPAL_LIVE_CLIENT_SECRET": "PAYPAL_LIVE_CLIENT_SECRET",
+    "PAYPAL_SANDBOX_CLIENT_ID": "PAYPAL_SANDBOX_CLIENT_ID",
+    "PAYPAL_SANDBOX_CLIENT_SECRET": "PAYPAL_SANDBOX_CLIENT_SECRET",
     "PAYPAL_CLIENT_ID": "PAYPAL_CLIENT_ID",
     "PAYPAL_CLIENT_SECRET": "PAYPAL_CLIENT_SECRET",
     # ISO currency package prices are quoted in for THIS deployment (MYR | AUD …)
@@ -102,6 +108,8 @@ SECRET_KEYS = {
     "GSC_SERVICE_ACCOUNT_JSON",
     "FONNTE_ACCOUNT_TOKEN",
     "EVOLUTION_API_KEY",
+    "PAYPAL_LIVE_CLIENT_SECRET",
+    "PAYPAL_SANDBOX_CLIENT_SECRET",
     "PAYPAL_CLIENT_SECRET",
     "FIELD_ENCRYPTION_KEY",
 }

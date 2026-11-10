@@ -18,8 +18,10 @@ class SettingsUpdate(BaseModel):
     evolution_base_url: str | None = None
     evolution_api_key: str | None = None
     whatsapp_default_provider: str | None = None  # "fonnte" | "evolution"
-    paypal_client_id: str | None = None
-    paypal_client_secret: str | None = None
+    paypal_live_client_id: str | None = None
+    paypal_live_client_secret: str | None = None
+    paypal_sandbox_client_id: str | None = None
+    paypal_sandbox_client_secret: str | None = None
     paypal_enabled: bool | None = None
     paypal_sandbox: bool | None = None
     billing_currency: str | None = None  # ISO 4217, e.g. "MYR" | "AUD"
@@ -47,9 +49,12 @@ class SettingsOut(BaseModel):
     evolution_api_key_set: bool
     evolution_api_key_hint: str | None = None
     whatsapp_default_provider: str
-    paypal_client_id: str
-    paypal_client_secret_set: bool
-    paypal_client_secret_hint: str | None = None
+    paypal_live_client_id: str
+    paypal_live_client_secret_set: bool
+    paypal_live_client_secret_hint: str | None = None
+    paypal_sandbox_client_id: str
+    paypal_sandbox_client_secret_set: bool
+    paypal_sandbox_client_secret_hint: str | None = None
     paypal_enabled: bool
     paypal_sandbox: bool
     billing_currency: str

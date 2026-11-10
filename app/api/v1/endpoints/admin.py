@@ -73,7 +73,7 @@ def get_settings(db: Session = Depends(get_db), admin: User = Depends(get_platfo
     hf = config_store.get("HUGGINGFACE_API_KEY")
     fonnte_tok = config_store.get("FONNTE_ACCOUNT_TOKEN")
     evo_key = config_store.get("EVOLUTION_API_KEY")
-    pp = paypal.config()
+    pp = paypal.config_both()
     return SettingsOut(
         openrouter_api_key_set=bool(ork),
         openrouter_api_key_hint=_hint(ork),
@@ -95,9 +95,12 @@ def get_settings(db: Session = Depends(get_db), admin: User = Depends(get_platfo
         evolution_api_key_set=bool(evo_key),
         evolution_api_key_hint=_hint(evo_key),
         whatsapp_default_provider=wa_provider.default_provider(),
-        paypal_client_id=pp["client_id"],
-        paypal_client_secret_set=bool(pp["client_secret"]),
-        paypal_client_secret_hint=_hint(pp["client_secret"]),
+        paypal_live_client_id=pp["live_client_id"],
+        paypal_live_client_secret_set=bool(pp["live_client_secret"]),
+        paypal_live_client_secret_hint=_hint(pp["live_client_secret"]),
+        paypal_sandbox_client_id=pp["sandbox_client_id"],
+        paypal_sandbox_client_secret_set=bool(pp["sandbox_client_secret"]),
+        paypal_sandbox_client_secret_hint=_hint(pp["sandbox_client_secret"]),
         paypal_enabled=pp["enabled"],
         paypal_sandbox=pp["sandbox"],
         billing_currency=billing.billing_currency(),
@@ -125,8 +128,10 @@ def update_settings(
         "embedding_model_huggingface": "EMBEDDING_MODEL_HUGGINGFACE",
         "evolution_base_url": "EVOLUTION_BASE_URL",
         "evolution_api_key": "EVOLUTION_API_KEY",
-        "paypal_client_id": "PAYPAL_CLIENT_ID",
-        "paypal_client_secret": "PAYPAL_CLIENT_SECRET",
+        "paypal_live_client_id": "PAYPAL_LIVE_CLIENT_ID",
+        "paypal_live_client_secret": "PAYPAL_LIVE_CLIENT_SECRET",
+        "paypal_sandbox_client_id": "PAYPAL_SANDBOX_CLIENT_ID",
+        "paypal_sandbox_client_secret": "PAYPAL_SANDBOX_CLIENT_SECRET",
     }
     updates: dict[str, str] = {}
     for field, key in field_to_key.items():
@@ -161,10 +166,11 @@ def update_settings(
 
 
 @router.post("/paypal/test", status_code=204)
-def test_paypal(admin: User = Depends(get_platform_admin)):
-    """Check the stored PayPal credentials can obtain an access token."""
+def test_paypal(mode: str | None = None, admin: User = Depends(get_platform_admin)):
+    """Check saved PayPal credentials can obtain an access token (?mode=sandbox|live,
+    default: whichever pair is active)."""
     try:
-        paypal.check_credentials()
+        paypal.check_credentials(mode)
     except paypal.PayPalError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
