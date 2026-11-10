@@ -121,7 +121,7 @@ def checkout(payload: SubscribeRequest, db: Session = Depends(get_db), user: Use
 
     # Paid plan — pick the gateway. Billplz collects MYR only; PayPal covers the rest.
     avail = billing.available_gateways(db)
-    gateway = payload.gateway or ("billplz" if avail["billplz"] else "paypal" if avail["paypal"] else None)
+    gateway = payload.gateway or billing.primary_gateway(avail)
     if gateway not in ("billplz", "paypal") or not avail.get(gateway):
         raise HTTPException(
             status_code=503,
@@ -173,7 +173,8 @@ def my_referrals(db: Session = Depends(get_db), user: User = Depends(get_current
 @router.get("/gateways", response_model=GatewaysOut)
 def gateways(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Which payment methods are live on this deployment + its currency."""
-    return GatewaysOut(**billing.available_gateways(db))
+    avail = billing.available_gateways(db)
+    return GatewaysOut(**avail, primary=billing.primary_gateway(avail))
 
 
 @router.post("/paypal/capture", response_model=PayPalCaptureOut)

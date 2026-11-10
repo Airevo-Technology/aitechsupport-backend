@@ -7,9 +7,10 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db, SessionLocal
-from app.core import cms, limits, email, config_store
+from app.core import cms, limits, email, config_store, billing
 from app.models.page import Page
 from app.models.package import Package
+from app.schemas.billing import GatewaysOut
 from app.schemas.content import PageListItem, PublicPageOut, PublicPackageOut, ContactRequest
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,14 @@ def packages(db: Session = Depends(get_db)):
         .order_by(Package.sort_order, Package.price_myr)
         .all()
     )
+
+
+@router.get("/gateways", response_model=GatewaysOut)
+def public_gateways(db: Session = Depends(get_db)):
+    """Which online payment method checkout will use here (no secrets): lets the
+    public checkout page name the right gateway before the visitor has an account."""
+    avail = billing.available_gateways(db)
+    return GatewaysOut(**avail, primary=billing.primary_gateway(avail))
 
 
 @router.get("/pages", response_model=list[PageListItem])

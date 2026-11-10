@@ -459,6 +459,11 @@ def available_gateways(db: Session | None = None) -> dict:
     }
 
 
+def primary_gateway(avail: dict) -> str | None:
+    """The online gateway checkout uses when the client doesn't pick one."""
+    return "billplz" if avail["billplz"] else "paypal" if avail["paypal"] else None
+
+
 # ===== PayPal =====
 
 def create_paypal_checkout(

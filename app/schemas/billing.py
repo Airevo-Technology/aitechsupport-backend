@@ -90,6 +90,8 @@ class GatewaysOut(BaseModel):
     billplz: bool
     paypal: bool
     bank_transfer: bool
+    # Gateway used when none is chosen explicitly: billplz | paypal | null.
+    primary: str | None = None
 
 
 class CheckoutOut(BaseModel):
