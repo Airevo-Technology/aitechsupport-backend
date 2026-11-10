@@ -116,6 +116,9 @@ def create_order(*, amount_cents: int, currency: str, description: str, custom_i
         "payment_source": {"paypal": {"experience_context": {
             "brand_name": "AiChatSupport",
             "user_action": "PAY_NOW",
+            # Open on the debit/credit-card form (guest checkout); PayPal falls back to
+            # its login page when the merchant account isn't eligible for guest cards.
+            "landing_page": "GUEST_CHECKOUT",
             "shipping_preference": "NO_SHIPPING",
             "return_url": return_url,
             "cancel_url": cancel_url,
