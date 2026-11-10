@@ -98,7 +98,8 @@ def checkout(payload: SubscribeRequest, db: Session = Depends(get_db), user: Use
         raise HTTPException(status_code=403, detail="Only an owner can change the plan")
 
     sub = billing.get_or_create_subscription(db, user.organization_id)
-    if pkg.slug == sub.plan:
+    # Re-selecting your current *paid* plan is a renewal payment; free has nothing to pay.
+    if pkg.slug == sub.plan and pkg.price_myr <= 0:
         raise HTTPException(status_code=400, detail="You're already on this plan.")
 
     # Free plan / downgrade to free — no payment needed, apply now.

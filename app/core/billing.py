@@ -112,6 +112,17 @@ def subscribe(db: Session, organization_id: int, package: Package) -> Subscripti
     return sub
 
 
+def roll_billing_period(sub: Subscription) -> None:
+    """Move the renewal date one period forward after a confirmed payment.
+
+    Paying early extends from the existing due date (no lost days); paying late
+    restarts from today."""
+    now = datetime.utcnow()
+    base = sub.next_billing_date if sub.next_billing_date and sub.next_billing_date > now else now
+    sub.start_date = sub.start_date or now
+    sub.next_billing_date = base + timedelta(days=PERIOD_DAYS)
+
+
 # ===== Billplz payment gateway =====
 
 def _as_bool(raw: str, default: bool) -> bool:
@@ -328,7 +339,8 @@ def process_billplz_webhook(db: Session, data: dict) -> str:
         logger.error("paid bill %s references missing package %s", bill_id, payment.plan_slug)
         return "unknown-package"
 
-    subscribe(db, payment.organization_id, package)
+    sub = subscribe(db, payment.organization_id, package)
+    roll_billing_period(sub)
     payment.status = "paid"
     payment.paid_at = datetime.utcnow()
     db.commit()
@@ -447,11 +459,9 @@ def confirm_bank_transfer(db: Session, payment: Payment) -> Subscription:
     if package is None:
         raise ValueError(f"Unknown package '{payment.plan_slug}'")
     sub = subscribe(db, payment.organization_id, package)
-    now = datetime.utcnow()
-    sub.start_date = sub.start_date or now
-    sub.next_billing_date = now + timedelta(days=PERIOD_DAYS)
+    roll_billing_period(sub)
     payment.status = "paid"
-    payment.paid_at = now
+    payment.paid_at = datetime.utcnow()
     db.commit()
     db.refresh(sub)
     return sub
