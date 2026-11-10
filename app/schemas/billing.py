@@ -1,4 +1,6 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from app.core import config_store
 
 from app.schemas.setting import FallbackTier
 
@@ -18,6 +20,8 @@ class PackageOut(BaseModel):
     # Ordered chat fallback chain for this plan; null -> inherit the
     # platform-wide chain (see models_catalog.chain_for_package).
     fallback_chain: list[FallbackTier] | None = None
+    # ISO currency price_myr is quoted in on this deployment (filled at response time).
+    currency: str = Field(default_factory=lambda: (config_store.get("BILLING_CURRENCY") or "MYR").strip().upper())
 
     class Config:
         from_attributes = True
@@ -50,6 +54,23 @@ class SubscriptionOut(BaseModel):
 
 class SubscribeRequest(BaseModel):
     package_slug: str
+    # "billplz" | "paypal"; omitted -> the first gateway available on this deployment.
+    gateway: str | None = None
+
+
+class PayPalCaptureRequest(BaseModel):
+    order_id: str
+
+
+class PayPalCaptureOut(BaseModel):
+    status: str  # activated | already-paid | not-paid
+
+
+class GatewaysOut(BaseModel):
+    currency: str
+    billplz: bool
+    paypal: bool
+    bank_transfer: bool
 
 
 class CheckoutOut(BaseModel):
@@ -61,7 +82,7 @@ class CheckoutOut(BaseModel):
       `payment_url` is null (no payment needed).
     """
     payment_url: str | None = None
-    bill_id: str | None = None
+    bill_id: str | None = None  # Billplz bill id, or PayPal order id
     subscription: SubscriptionOut | None = None
 
 
@@ -113,6 +134,7 @@ class ClientPaymentRow(BaseModel):
     id: int
     plan_slug: str
     amount_cents: int
+    currency: str = "MYR"
     method: str
     status: str
     sandbox: bool
@@ -151,6 +173,7 @@ class PaymentRow(BaseModel):
     status: str
     sandbox: bool
     billplz_bill_id: str | None = None
+    paypal_order_id: str | None = None
     reference_note: str | None = None
     reported_at: str | None = None
     paid_at: str | None = None
@@ -163,6 +186,7 @@ class PaymentsSummary(BaseModel):
     pending: int
     failed: int
     live_revenue_cents: int  # sum of paid, non-sandbox bills
+    currency: str = "MYR"  # this deployment's billing currency
 
 
 class PaymentsOut(BaseModel):

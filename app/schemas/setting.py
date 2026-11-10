@@ -15,6 +15,14 @@ class SettingsUpdate(BaseModel):
     embedding_model_openrouter_fallback_2: str | None = None
     huggingface_api_key: str | None = None
     embedding_model_huggingface: str | None = None
+    evolution_base_url: str | None = None
+    evolution_api_key: str | None = None
+    whatsapp_default_provider: str | None = None  # "fonnte" | "evolution"
+    paypal_client_id: str | None = None
+    paypal_client_secret: str | None = None
+    paypal_enabled: bool | None = None
+    paypal_sandbox: bool | None = None
+    billing_currency: str | None = None  # ISO 4217, e.g. "MYR" | "AUD"
 
 
 class SettingsOut(BaseModel):
@@ -35,6 +43,16 @@ class SettingsOut(BaseModel):
     huggingface_api_key_set: bool
     huggingface_api_key_hint: str | None = None
     embedding_model_huggingface: str
+    evolution_base_url: str
+    evolution_api_key_set: bool
+    evolution_api_key_hint: str | None = None
+    whatsapp_default_provider: str
+    paypal_client_id: str
+    paypal_client_secret_set: bool
+    paypal_client_secret_hint: str | None = None
+    paypal_enabled: bool
+    paypal_sandbox: bool
+    billing_currency: str
 
 
 class ModelOption(BaseModel):

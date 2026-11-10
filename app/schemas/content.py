@@ -3,6 +3,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core import config_store
+
 
 # ===== Homepage (structured JSON blob) =====
 
@@ -79,6 +81,8 @@ class PublicPackageOut(BaseModel):
     monthly_token_quota: int
     max_bots: int
     features: list = []
+    # ISO currency price_myr is quoted in on this deployment.
+    currency: str = Field(default_factory=lambda: (config_store.get("BILLING_CURRENCY") or "MYR").strip().upper())
 
     class Config:
         from_attributes = True

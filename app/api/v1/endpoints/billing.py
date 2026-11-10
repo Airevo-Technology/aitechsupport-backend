@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.api.deps import get_current_user
-from app.core import billing, storage, email as email_service
+from app.core import billing, paypal, storage, email as email_service
 from app.models.user import User
 from app.models.organization import Organization
 from app.models.package import Package
@@ -18,6 +18,9 @@ from app.schemas.billing import (
     BankTransferSettingsOut,
     BankTransferReportRequest,
     BankTransferReportOut,
+    GatewaysOut,
+    PayPalCaptureRequest,
+    PayPalCaptureOut,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,14 +110,19 @@ def checkout(payload: SubscribeRequest, db: Session = Depends(get_db), user: Use
         sub = billing.subscribe(db, user.organization_id, pkg)
         return CheckoutOut(subscription=_subscription_out(db, sub))
 
-    # Paid plan — needs a live Billplz gateway.
-    if not billing.billplz_is_configured(db):
+    # Paid plan — pick the gateway. Billplz collects MYR only; PayPal covers the rest.
+    avail = billing.available_gateways(db)
+    gateway = payload.gateway or ("billplz" if avail["billplz"] else "paypal" if avail["paypal"] else None)
+    if gateway not in ("billplz", "paypal") or not avail.get(gateway):
         raise HTTPException(
             status_code=503,
             detail="Online payment isn't enabled yet — contact us to activate a paid plan.",
         )
     org = db.query(Organization).filter(Organization.id == user.organization_id).first()
     try:
+        if gateway == "paypal":
+            payment, url = billing.create_paypal_checkout(db, organization_id=user.organization_id, package=pkg)
+            return CheckoutOut(payment_url=url, bill_id=payment.paypal_order_id)
         payment, url = billing.create_checkout_bill(
             db,
             organization_id=user.organization_id,
@@ -125,6 +133,27 @@ def checkout(payload: SubscribeRequest, db: Session = Depends(get_db), user: Use
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=f"Could not start checkout: {exc}")
     return CheckoutOut(payment_url=url, bill_id=payment.billplz_bill_id)
+
+
+@router.get("/gateways", response_model=GatewaysOut)
+def gateways(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Which payment methods are live on this deployment + its currency."""
+    return GatewaysOut(**billing.available_gateways(db))
+
+
+@router.post("/paypal/capture", response_model=PayPalCaptureOut)
+def paypal_capture(payload: PayPalCaptureRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Called by the billing page after PayPal redirects the payer back with
+    `?token=<order id>`. Captures the order and activates the plan."""
+    if user.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only an owner can change the plan")
+    try:
+        status = billing.capture_paypal_payment(db, payload.order_id, user.organization_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except paypal.PayPalError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not confirm PayPal payment: {exc}")
+    return PayPalCaptureOut(status=status)
 
 
 @router.post("/webhook/billplz")

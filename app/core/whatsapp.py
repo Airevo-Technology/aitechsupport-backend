@@ -12,6 +12,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.core import wa_provider
 from app.models.channel import Channel
 from app.models.bot import Bot
 from app.models.conversation import Conversation, Message
@@ -52,6 +53,7 @@ def get_or_create_whatsapp_channel(db: Session, bot: Bot) -> Channel:
             organization_id=bot.organization_id,
             bot_id=bot.id,
             kind=WHATSAPP_KIND,
+            provider=wa_provider.default_provider(),
             connection_status="disconnected",
             webhook_secret=gen_webhook_secret(),
             is_active=False,
@@ -62,14 +64,17 @@ def get_or_create_whatsapp_channel(db: Session, bot: Bot) -> Channel:
     return ch
 
 
-def resolve_channel(db: Session, channel_id: int, secret: str) -> Channel | None:
+def resolve_channel(db: Session, channel_id: int, secret: str, provider: str | None = None) -> Channel | None:
     """Resolve a WhatsApp Channel from a webhook URL's id+secret, else None.
-    Fonnte doesn't sign webhook payloads, so this URL-based check IS the auth."""
+    Fonnte/Evolution don't sign webhook payloads, so this URL-based check IS the
+    auth. `provider`, when given, must match the channel's own provider."""
     ch = (
         db.query(Channel)
         .filter(Channel.id == channel_id, Channel.kind == WHATSAPP_KIND)
         .first()
     )
+    if ch is not None and provider and ch.provider != provider:
+        return None
     if ch is None or not ch.webhook_secret:
         return None
     if not secrets.compare_digest(ch.webhook_secret, secret):

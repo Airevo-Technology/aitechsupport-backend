@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.api.deps import get_current_user, get_agent_user
 from app.core import (
-    rag, embeddings, llm, models_catalog, billing, widget, whatsapp, fonnte, crypto,
+    rag, embeddings, llm, models_catalog, billing, widget, whatsapp, fonnte, evolution, wa_provider, crypto,
     analytics, attachments, storage,
 )
 from app.core.events import bus, conv_topic, org_topic, user_topic
@@ -239,7 +239,7 @@ def rotate_widget_key(bot_id: int, db: Session = Depends(get_db), user: User = D
 # ===== WhatsApp (Fonnte, JWT, org-scoped) =====
 
 def _whatsapp_webhook_urls(channel: Channel) -> tuple[str, str]:
-    base = f"{settings.API_BASE_URL}{settings.API_V1_STR}/webhooks/whatsapp/fonnte/{channel.id}/{channel.webhook_secret}"
+    base = f"{settings.API_BASE_URL}{settings.API_V1_STR}/webhooks/whatsapp/{channel.provider}/{channel.id}/{channel.webhook_secret}"
     return f"{base}/message", f"{base}/status"
 
 
@@ -283,6 +283,45 @@ def connect_whatsapp(bot_id: int, db: Session = Depends(get_db), user: User = De
     if ch.connection_status == "connected":
         return WhatsAppConnectOut(connection_status=ch.connection_status, qr_base64=None)
 
+    if not ch.access_token and ch.provider != wa_provider.default_provider():
+        # Never linked yet — adopt the platform's current default provider.
+        ch.provider = wa_provider.default_provider()
+        db.commit()
+    if ch.provider == "evolution":
+        return _connect_evolution(db, ch)
+    return _connect_fonnte(db, ch, bot)
+
+
+def _connect_evolution(db: Session, ch: Channel) -> WhatsAppConnectOut:
+    name = wa_provider.instance_name(ch)
+    webhook_url, _status_url = _whatsapp_webhook_urls(ch)
+    try:
+        if not ch.access_token:
+            created = evolution.create_instance(name, webhook_url)
+            ch.phone_number_id = name
+            token = created.get("hash")
+            token = token.get("apikey") if isinstance(token, dict) else token
+            ch.access_token = crypto.encrypt(token or name)
+            db.commit()
+            qr_b64 = (created.get("qrcode") or {}).get("base64")
+        else:
+            evolution.set_webhook(name, webhook_url)  # idempotent re-assert
+            qr_b64 = None
+        if not qr_b64:
+            qr_b64 = evolution.get_qr(name)["base64"]
+    except evolution.AlreadyConnected:
+        ch.connection_status = "connected"
+        ch.is_active = True
+        db.commit()
+        return WhatsAppConnectOut(connection_status="connected", qr_base64=None)
+    except evolution.EvolutionError as e:
+        raise HTTPException(status_code=502, detail=f"Could not connect WhatsApp: {e}")
+    ch.connection_status = "pending_qr"
+    db.commit()
+    return WhatsAppConnectOut(connection_status="pending_qr", qr_base64=qr_b64)
+
+
+def _connect_fonnte(db: Session, ch: Channel, bot: Bot) -> WhatsAppConnectOut:
     device_name = f"bot-{bot.id}"
     if not ch.access_token:
         device_number = whatsapp.gen_device_placeholder(ch.id)
@@ -326,8 +365,8 @@ def disconnect_whatsapp(bot_id: int, db: Session = Depends(get_db), user: User =
     ch = whatsapp.get_or_create_whatsapp_channel(db, bot)
     if ch.access_token:
         try:
-            fonnte.disconnect_device(crypto.decrypt(ch.access_token))
-        except fonnte.FonnteError as e:
+            wa_provider.disconnect(ch)
+        except (fonnte.FonnteError, evolution.EvolutionError) as e:
             raise HTTPException(status_code=502, detail=f"Could not disconnect WhatsApp: {e}")
     ch.connection_status = "disconnected"
     ch.is_active = False
@@ -648,9 +687,9 @@ def _deliver_to_whatsapp_if_applicable(db: Session, conv: Conversation, content:
     if channel is None or not channel.access_token:
         return
     try:
-        fonnte.send_message(crypto.decrypt(channel.access_token), conv.external_user_id, content)
+        wa_provider.send_text(channel, conv.external_user_id, content)
     except Exception:  # noqa: BLE001 — reply already saved; delivery failure shouldn't 500 the request
-        logger.exception("fonnte send failed for conversation %s", conv.id)
+        logger.exception("whatsapp send failed for conversation %s", conv.id)
 
 
 @router.post("/{bot_id}/conversations/{conv_id}/release", response_model=ConversationOut)

@@ -23,6 +23,10 @@ class Channel(Base):
     # whatsapp | widget (telegram later)
     kind = Column(String, default="whatsapp", nullable=False)
 
+    # Which WhatsApp gateway owns this channel: fonnte | evolution. Chosen at
+    # first connect from the WHATSAPP_DEFAULT_PROVIDER setting, then fixed.
+    provider = Column(String, default="fonnte", nullable=False, server_default="fonnte")
+
     # WhatsApp-specific (Fonnte gateway — see app/core/fonnte.py)
     # waba_id unused for Fonnte (no WABA concept); kept for a possible future
     # Meta-direct provider.

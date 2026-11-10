@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.api.deps import get_platform_admin
-from app.core import config_store, models_catalog, billing, email as email_service, storage, cms, gsc_service
+from app.core import config_store, models_catalog, billing, paypal, wa_provider, email as email_service, storage, cms, gsc_service
 from app.core.settings import settings
 from app.models.user import User
 from app.models.organization import Organization
@@ -72,6 +72,8 @@ def get_settings(db: Session = Depends(get_db), admin: User = Depends(get_platfo
     voy = config_store.get("VOYAGE_API_KEY")
     hf = config_store.get("HUGGINGFACE_API_KEY")
     fonnte_tok = config_store.get("FONNTE_ACCOUNT_TOKEN")
+    evo_key = config_store.get("EVOLUTION_API_KEY")
+    pp = paypal.config()
     return SettingsOut(
         openrouter_api_key_set=bool(ork),
         openrouter_api_key_hint=_hint(ork),
@@ -89,6 +91,16 @@ def get_settings(db: Session = Depends(get_db), admin: User = Depends(get_platfo
         huggingface_api_key_set=bool(hf),
         huggingface_api_key_hint=_hint(hf),
         embedding_model_huggingface=config_store.get("EMBEDDING_MODEL_HUGGINGFACE") or "BAAI/bge-m3",
+        evolution_base_url=config_store.get("EVOLUTION_BASE_URL"),
+        evolution_api_key_set=bool(evo_key),
+        evolution_api_key_hint=_hint(evo_key),
+        whatsapp_default_provider=wa_provider.default_provider(),
+        paypal_client_id=pp["client_id"],
+        paypal_client_secret_set=bool(pp["client_secret"]),
+        paypal_client_secret_hint=_hint(pp["client_secret"]),
+        paypal_enabled=pp["enabled"],
+        paypal_sandbox=pp["sandbox"],
+        billing_currency=billing.billing_currency(),
     )
 
 
@@ -111,6 +123,10 @@ def update_settings(
         "embedding_model_openrouter_fallback_2": "EMBEDDING_MODEL_OPENROUTER_FALLBACK_2",
         "huggingface_api_key": "HUGGINGFACE_API_KEY",
         "embedding_model_huggingface": "EMBEDDING_MODEL_HUGGINGFACE",
+        "evolution_base_url": "EVOLUTION_BASE_URL",
+        "evolution_api_key": "EVOLUTION_API_KEY",
+        "paypal_client_id": "PAYPAL_CLIENT_ID",
+        "paypal_client_secret": "PAYPAL_CLIENT_SECRET",
     }
     updates: dict[str, str] = {}
     for field, key in field_to_key.items():
@@ -125,9 +141,32 @@ def update_settings(
                 detail="embeddings_provider must be 'voyage', 'openrouter', or 'huggingface'",
             )
         updates["EMBEDDINGS_PROVIDER"] = provider
+    if payload.whatsapp_default_provider is not None:
+        wa = payload.whatsapp_default_provider.strip().lower()
+        if wa not in wa_provider.PROVIDERS:
+            raise HTTPException(status_code=422, detail="whatsapp_default_provider must be 'fonnte' or 'evolution'")
+        updates["WHATSAPP_DEFAULT_PROVIDER"] = wa
+    if payload.billing_currency is not None and payload.billing_currency.strip():
+        cur = payload.billing_currency.strip().upper()
+        if len(cur) != 3 or not cur.isalpha():
+            raise HTTPException(status_code=422, detail="billing_currency must be a 3-letter ISO code, e.g. MYR or AUD")
+        updates["BILLING_CURRENCY"] = cur
+    for flag, key in (("paypal_enabled", "PAYPAL_ENABLED"), ("paypal_sandbox", "PAYPAL_SANDBOX")):
+        value = getattr(payload, flag)
+        if value is not None:
+            updates[key] = "true" if value else "false"
     if updates:
         config_store.set_many(db, updates)
     return get_settings(db=db, admin=admin)
+
+
+@router.post("/paypal/test", status_code=204)
+def test_paypal(admin: User = Depends(get_platform_admin)):
+    """Check the stored PayPal credentials can obtain an access token."""
+    try:
+        paypal.check_credentials()
+    except paypal.PayPalError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # ===== Support widget on our own site (aichatsupport.my) =====
@@ -977,6 +1016,7 @@ def list_payments(
         pending=by_status.get("pending", 0),
         failed=by_status.get("failed", 0),
         live_revenue_cents=int(live_revenue),
+        currency=billing.billing_currency(),
     )
 
     q = db.query(Payment)
@@ -997,10 +1037,12 @@ def list_payments(
             organization_name=org_names.get(r.organization_id),
             plan_slug=r.plan_slug,
             amount_cents=r.amount_cents,
+            currency=r.currency,
             method=r.method,
             status=r.status,
             sandbox=r.sandbox,
             billplz_bill_id=r.billplz_bill_id,
+            paypal_order_id=r.paypal_order_id,
             reference_note=r.reference_note,
             reported_at=r.reported_at.isoformat() if r.reported_at else None,
             paid_at=r.paid_at.isoformat() if r.paid_at else None,
@@ -1044,10 +1086,12 @@ def confirm_payment(payment_id: int, db: Session = Depends(get_db), admin: User 
         organization_name=org.name if org else None,
         plan_slug=payment.plan_slug,
         amount_cents=payment.amount_cents,
+        currency=payment.currency,
         method=payment.method,
         status=payment.status,
         sandbox=payment.sandbox,
         billplz_bill_id=payment.billplz_bill_id,
+        paypal_order_id=payment.paypal_order_id,
         reference_note=payment.reference_note,
         reported_at=payment.reported_at.isoformat() if payment.reported_at else None,
         paid_at=payment.paid_at.isoformat() if payment.paid_at else None,

@@ -72,6 +72,18 @@ MANAGED_KEYS = {
     # WhatsApp (Fonnte gateway) — one platform-owned account provisions a device
     # per client bot; see app/core/fonnte.py.
     "FONNTE_ACCOUNT_TOKEN": "FONNTE_ACCOUNT_TOKEN",
+    # WhatsApp (Evolution API) — self-hosted gateway; one global key creates an
+    # instance per client bot. WHATSAPP_DEFAULT_PROVIDER picks it for NEW channels.
+    "EVOLUTION_BASE_URL": "EVOLUTION_BASE_URL",
+    "EVOLUTION_API_KEY": "EVOLUTION_API_KEY",
+    "WHATSAPP_DEFAULT_PROVIDER": "WHATSAPP_DEFAULT_PROVIDER",  # fonnte | evolution
+    # PayPal (international card/PayPal collections, e.g. Australia)
+    "PAYPAL_ENABLED": "PAYPAL_ENABLED",          # "true" | "false"
+    "PAYPAL_SANDBOX": "PAYPAL_SANDBOX",          # "true" | "false"
+    "PAYPAL_CLIENT_ID": "PAYPAL_CLIENT_ID",
+    "PAYPAL_CLIENT_SECRET": "PAYPAL_CLIENT_SECRET",
+    # ISO currency package prices are quoted in for THIS deployment (MYR | AUD …)
+    "BILLING_CURRENCY": "BILLING_CURRENCY",
     # Field-level encryption key for Channel.access_token — see app/core/crypto.py.
     "FIELD_ENCRYPTION_KEY": "FIELD_ENCRYPTION_KEY",
 }
@@ -89,6 +101,8 @@ SECRET_KEYS = {
     "BILLPLZ_SANDBOX_X_SIGNATURE_KEY",
     "GSC_SERVICE_ACCOUNT_JSON",
     "FONNTE_ACCOUNT_TOKEN",
+    "EVOLUTION_API_KEY",
+    "PAYPAL_CLIENT_SECRET",
     "FIELD_ENCRYPTION_KEY",
 }
 

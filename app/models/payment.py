@@ -22,12 +22,17 @@ class Payment(Base):
     plan_slug = Column(String, nullable=False)
     amount_cents = Column(Integer, nullable=False)  # sen (RM * 100)
 
-    # billplz | bank_transfer
+    # ISO currency of amount_cents (the deployment's BILLING_CURRENCY at checkout).
+    currency = Column(String, default="MYR", nullable=False, server_default="MYR")
+
+    # billplz | paypal | bank_transfer
     method = Column(String, default="billplz", nullable=False)
 
     # Billplz bill id (null only if the gateway call failed before we got one, or
     # this is a bank_transfer payment which has no gateway bill at all).
     billplz_bill_id = Column(String, unique=True, index=True, nullable=True)
+    # PayPal order id (paypal payments only).
+    paypal_order_id = Column(String, unique=True, index=True, nullable=True)
     # pending | paid | failed
     status = Column(String, default="pending", nullable=False)
     # True if created against the Billplz sandbox environment.

@@ -18,7 +18,7 @@ import httpx
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core import config_store
+from app.core import config_store, paypal
 from app.core.settings import settings
 from app.models.subscription import Subscription
 from app.models.package import Package
@@ -348,6 +348,109 @@ def process_billplz_webhook(db: Session, data: dict) -> str:
     return "activated"
 
 
+# ===== Currency + gateway availability =====
+
+def billing_currency() -> str:
+    """ISO currency package prices are quoted in on THIS deployment (MY: MYR, AU: AUD).
+    Package.price_myr holds the amount in that currency (column name is historical)."""
+    return (config_store.get("BILLING_CURRENCY") or "MYR").strip().upper()
+
+
+def available_gateways(db: Session | None = None) -> dict:
+    """Which ways a client can pay right now. Billplz only collects MYR."""
+    return {
+        "currency": billing_currency(),
+        "billplz": billplz_is_configured(db) and billing_currency() == "MYR",
+        "paypal": paypal.is_configured(),
+        "bank_transfer": bank_transfer_is_configured(db),
+    }
+
+
+# ===== PayPal =====
+
+def create_paypal_checkout(
+    db: Session, *, organization_id: int, package: Package,
+) -> tuple[Payment, str]:
+    """Create a pending Payment + a PayPal order; return (payment, approval_url).
+
+    The Payment row is written first, then tagged with the order id, so a capture
+    can always be reconciled to the right org + plan."""
+    if not paypal.is_configured():
+        raise RuntimeError("PayPal is not configured")
+    cfg = paypal.config()
+    currency = billing_currency()
+    payment = Payment(
+        organization_id=organization_id,
+        plan_slug=package.slug,
+        amount_cents=int(package.price_myr) * 100,
+        currency=currency,
+        method="paypal",
+        status="pending",
+        sandbox=cfg["sandbox"],
+    )
+    db.add(payment)
+    db.commit()
+    db.refresh(payment)
+    base = f"{settings.FRONTEND_URL}/dashboard/billing"
+    try:
+        order_id, url = paypal.create_order(
+            amount_cents=payment.amount_cents,
+            currency=currency,
+            description=f"AiChatSupport {package.name} plan (monthly)",
+            custom_id=f"org{organization_id}:{package.slug}",
+            return_url=f"{base}?gateway=paypal",
+            cancel_url=f"{base}?gateway=paypal&cancelled=1",
+        )
+    except paypal.PayPalError as exc:
+        payment.status = "failed"
+        db.commit()
+        raise RuntimeError(str(exc)) from exc
+    payment.paypal_order_id = order_id
+    db.commit()
+    logger.info("created PayPal order %s for org %s plan %s", order_id, organization_id, package.slug)
+    return payment, url
+
+
+def capture_paypal_payment(db: Session, order_id: str, organization_id: int) -> str:
+    """Capture an approved PayPal order and activate the plan (idempotent).
+
+    Returns "activated" | "already-paid" | "not-paid". Raises ValueError for an
+    unknown order or one that belongs to another organization."""
+    payment = db.query(Payment).filter(Payment.paypal_order_id == order_id).first()
+    if payment is None or payment.organization_id != organization_id:
+        raise ValueError("Unknown PayPal order")
+    if payment.status == "paid":
+        return "already-paid"
+
+    order = paypal.capture_order(order_id)
+    if order.get("status") != "COMPLETED":
+        return "not-paid"
+    captures = [
+        c for u in order.get("purchase_units", [])
+        for c in (u.get("payments") or {}).get("captures", [])
+    ]
+    capture = next((c for c in captures if c.get("status") == "COMPLETED"), None)
+    if capture is None:
+        return "not-paid"
+    paid_cents = round(float(capture["amount"]["value"]) * 100)
+    if paid_cents != payment.amount_cents or capture["amount"]["currency_code"] != payment.currency:
+        logger.error("PayPal order %s amount mismatch: got %s %s, expected %s %s", order_id,
+                     paid_cents, capture["amount"]["currency_code"], payment.amount_cents, payment.currency)
+        raise ValueError("Captured amount does not match the order")
+
+    package = package_for(db, payment.plan_slug)
+    if package is None:
+        logger.error("paid order %s references missing package %s", order_id, payment.plan_slug)
+        raise ValueError("Unknown package")
+    sub = subscribe(db, payment.organization_id, package)
+    roll_billing_period(sub)
+    payment.status = "paid"
+    payment.paid_at = datetime.utcnow()
+    db.commit()
+    logger.info("activated plan %s for org %s (PayPal order %s)", package.slug, payment.organization_id, order_id)
+    return "activated"
+
+
 # ===== Bank transfer fallback (manual, admin-confirmed) =====
 
 def bank_transfer_config(db: Session | None = None) -> dict:
@@ -399,6 +502,7 @@ def report_bank_transfer(
         organization_id=organization_id,
         plan_slug=package.slug,
         amount_cents=int(package.price_myr) * 100,
+        currency=billing_currency(),
         method="bank_transfer",
         status="pending",
         sandbox=False,
@@ -415,7 +519,7 @@ def report_bank_transfer(
 def notify_admin_bank_transfer(db: Session, payment: Payment, org_name: str) -> None:
     """Best-effort WhatsApp ping to the platform admin via the configured device.
     Never raises — a missing/broken device shouldn't block the customer's report."""
-    from app.core import fonnte, crypto  # local import: avoid a hard dep for callers that don't need it
+    from app.core import wa_provider  # local import: avoid a hard dep for callers that don't need it
 
     cfg = bank_transfer_config(db)
     channel_id = cfg["notify_channel_id"]
@@ -430,12 +534,12 @@ def notify_admin_bank_transfer(db: Session, payment: Payment, org_name: str) -> 
         f"New bank transfer reported.\n"
         f"Client: {org_name}\n"
         f"Plan: {payment.plan_slug}\n"
-        f"Amount: RM{payment.amount_cents / 100:.2f}\n"
+        f"Amount: {payment.currency} {payment.amount_cents / 100:.2f}\n"
         f"Note: {payment.reference_note or '(none)'}\n"
         f"Confirm in the admin Payments page."
     )
     try:
-        fonnte.send_message(crypto.decrypt(channel.access_token), target, message)
+        wa_provider.send_text(channel, target, message)
     except Exception:  # noqa: BLE001
         logger.exception("failed to send bank transfer WhatsApp notification")
 
