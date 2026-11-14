@@ -256,6 +256,27 @@ class BillplzSettingsUpdate(BaseModel):
     sandbox_collection_id: str | None = None
 
 
+class AirevoSettingsOut(BaseModel):
+    """airevo.com.au marketplace connection. The secret is never returned in full."""
+    enabled: bool
+    configured: bool        # enabled + key id + secret
+    sells_paid_plans: bool  # configured listing URL: paid self-checkout is closed
+    key_id: str
+    secret_set: bool
+    secret_hint: str | None = None
+    api_base: str
+    listing_url: str
+
+
+class AirevoSettingsUpdate(BaseModel):
+    """Omit a field to keep it. Blank secret -> keep; blank listing URL -> clear."""
+    enabled: bool | None = None
+    key_id: str | None = None
+    secret: str | None = None
+    api_base: str | None = None
+    listing_url: str | None = None
+
+
 class BankTransferSettingsOut(BaseModel):
     """Manual bank-transfer fallback config, shown to customers when enabled."""
     enabled: bool

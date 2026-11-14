@@ -348,3 +348,98 @@ def test_sso_verify_call_is_signed_over_the_api_path(monkeypatch):
     assert h["X-Airevo-Signature"] == airevo.signature(
         SECRET, h["X-Airevo-Timestamp"], "POST", "/api/marketplace/v1/sso/verify", captured["content"]
     )
+
+
+# ===== Admin connection settings =====
+
+
+class _Resp:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+
+def test_connection_check_signs_a_lookup_and_treats_404_as_accepted(monkeypatch):
+    captured = {}
+
+    def fake_get(url, headers, timeout):
+        captured.update(url=url, headers=headers)
+        return _Resp(404)
+
+    monkeypatch.setattr(airevo.httpx, "get", fake_get)
+    airevo.check_connection()
+
+    h = captured["headers"]
+    assert captured["url"] == "https://airevo.test/api/marketplace/v1/subscriptions/0"
+    assert h["X-Airevo-Key-Id"] == KEY_ID
+    assert h["X-Airevo-Signature"] == airevo.signature(
+        SECRET, h["X-Airevo-Timestamp"], "GET", "/api/marketplace/v1/subscriptions/0", b""
+    )
+
+
+@pytest.mark.parametrize("status, code", [(401, "rejected"), (500, "unexpected")])
+def test_connection_check_explains_a_refusal(monkeypatch, status, code):
+    monkeypatch.setattr(airevo.httpx, "get", lambda url, headers, timeout: _Resp(status))
+    with pytest.raises(airevo.AirevoError) as err:
+        airevo.check_connection()
+    assert err.value.code == code
+
+
+def test_connection_check_needs_saved_credentials(monkeypatch):
+    monkeypatch.delenv("AIREVO_SECRET")
+    with pytest.raises(airevo.AirevoError) as err:
+        airevo.check_connection()
+    assert err.value.code == "not_configured"
+
+
+@pytest.fixture
+def clean_airevo_rows(db):
+    """Admin saves land in the settings table, which outranks the env fixture."""
+    from app.models.setting import Setting
+
+    keys = ["AIREVO_ENABLED", "AIREVO_KEY_ID", "AIREVO_SECRET", "AIREVO_API_BASE", "AIREVO_LISTING_URL"]
+    db.query(Setting).filter(Setting.key.in_(keys)).delete(synchronize_session=False)
+    db.commit()
+    yield
+    db.query(Setting).filter(Setting.key.in_(keys)).delete(synchronize_session=False)
+    db.commit()
+
+
+def _platform_admin(db) -> User:
+    user = _make_user(db)
+    user.is_platform_admin = True
+    db.commit()
+    return user
+
+
+def test_admin_settings_save_and_never_return_the_secret(client, db, clean_airevo_rows):
+    headers = _auth(_platform_admin(db))
+    r = client.put(
+        "/api/v1/admin/airevo",
+        headers=headers,
+        json={"enabled": True, "key_id": " ak_live_new ", "secret": "sk_live_brandnewsecret9876", "listing_url": "https://airevo.test/marketplace/new/"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["key_id"] == "ak_live_new"
+    assert body["secret_set"] is True and body["secret_hint"] == "…9876"
+    assert "sk_live_brandnewsecret9876" not in r.text
+    assert body["configured"] is True
+    assert body["listing_url"] == "https://airevo.test/marketplace/new"
+    assert body["sells_paid_plans"] is True
+
+    # A blank secret keeps the saved one.
+    r = client.put("/api/v1/admin/airevo", headers=headers, json={"secret": "  "})
+    assert r.json()["secret_hint"] == "…9876"
+    assert airevo._secrets()[0] == "sk_live_brandnewsecret9876"
+
+
+def test_admin_settings_refuse_plain_http(client, db, clean_airevo_rows):
+    r = client.put("/api/v1/admin/airevo", headers=_auth(_platform_admin(db)), json={"api_base": "http://airevo.test/api"})
+    assert r.status_code == 422
+
+
+def test_admin_settings_are_platform_admin_only(client, db):
+    headers = _auth(_make_user(db))
+    assert client.get("/api/v1/admin/airevo", headers=headers).status_code == 403
+    assert client.put("/api/v1/admin/airevo", headers=headers, json={"enabled": True}).status_code == 403
+    assert client.post("/api/v1/admin/airevo/test", headers=headers).status_code == 403

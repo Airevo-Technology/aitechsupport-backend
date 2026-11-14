@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.api.deps import get_platform_admin
-from app.core import config_store, models_catalog, billing, paypal, wa_provider, email as email_service, storage, cms, gsc_service
+from app.core import airevo, config_store, models_catalog, billing, paypal, wa_provider, email as email_service, storage, cms, gsc_service
 from app.core.settings import settings
 from app.models.user import User
 from app.models.organization import Organization
@@ -45,6 +45,8 @@ from app.schemas.billing import (
     SetBillingCycleRequest,
     BankTransferSettingsOut,
     BankTransferSettingsUpdate,
+    AirevoSettingsOut,
+    AirevoSettingsUpdate,
 )
 from app.schemas.email import (
     SMTPSettingsOut,
@@ -905,6 +907,56 @@ def test_billplz(db: Session = Depends(get_db), admin: User = Depends(get_platfo
         billing.test_billplz(db)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Billplz check failed: {exc}")
+
+
+# ===== airevo.com.au marketplace connection =====
+
+@router.get("/airevo", response_model=AirevoSettingsOut)
+def get_airevo(admin: User = Depends(get_platform_admin)):
+    secret = config_store.get("AIREVO_SECRET")
+    return AirevoSettingsOut(
+        enabled=airevo.enabled(),
+        configured=airevo.is_configured(),
+        sells_paid_plans=airevo.sells_paid_plans(),
+        key_id=airevo.key_id(),
+        secret_set=bool(secret),
+        secret_hint=_hint(secret),
+        api_base=airevo.api_base(),
+        listing_url=airevo.listing_url(),
+    )
+
+
+@router.put("/airevo", response_model=AirevoSettingsOut)
+def update_airevo(payload: AirevoSettingsUpdate, db: Session = Depends(get_db), admin: User = Depends(get_platform_admin)):
+    """Blank/omitted secret is kept. An empty listing URL clears it, which
+    reopens paid self-checkout on this site."""
+    updates: dict[str, str] = {}
+    if payload.enabled is not None:
+        updates["AIREVO_ENABLED"] = "true" if payload.enabled else "false"
+    if payload.key_id is not None and payload.key_id.strip():
+        updates["AIREVO_KEY_ID"] = payload.key_id.strip()
+    if payload.secret is not None and payload.secret.strip():
+        updates["AIREVO_SECRET"] = payload.secret.strip()
+    for field, key in (("api_base", "AIREVO_API_BASE"), ("listing_url", "AIREVO_LISTING_URL")):
+        value = getattr(payload, field)
+        if value is None:
+            continue
+        value = value.strip().rstrip("/")
+        if value and not value.startswith("https://"):
+            raise HTTPException(status_code=422, detail=f"{field} must be an https:// URL")
+        updates[key] = value
+    if updates:
+        config_store.set_many(db, updates)
+    return get_airevo(admin=admin)
+
+
+@router.post("/airevo/test", status_code=204)
+def test_airevo(admin: User = Depends(get_platform_admin)):
+    """Send Airevo a signed request with the saved key and secret."""
+    try:
+        airevo.check_connection()
+    except airevo.AirevoError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
 
 
 # ===== Bank transfer fallback payment (manual, admin-confirmed) =====

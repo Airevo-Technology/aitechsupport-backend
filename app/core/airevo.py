@@ -173,6 +173,26 @@ def sso_verify(token: str) -> dict:
     return _post("/sso/verify", {"token": token})
 
 
+def check_connection() -> None:
+    """Prove Airevo accepts our key and secret: a signed lookup of subscription 0.
+
+    Airevo answers 404 only after the signature verifies (401 otherwise), so a
+    404 is the success case. Raises AirevoError with a message for the admin.
+    """
+    if not key_id() or not _secrets():
+        raise AirevoError(400, "not_configured", "Save the key ID and secret first.")
+    url = api_base() + "/subscriptions/0"
+    try:
+        resp = httpx.get(url, headers=signed_headers("GET", urlparse(url).path, b""), timeout=10)
+    except httpx.HTTPError as exc:
+        raise AirevoError(502, "unreachable", f"Could not reach {api_base()} ({exc.__class__.__name__}).")
+    if resp.status_code == 404:
+        return
+    if resp.status_code == 401:
+        raise AirevoError(400, "rejected", "Airevo rejected the key ID or secret. Check both were copied in full.")
+    raise AirevoError(502, "unexpected", f"Airevo answered HTTP {resp.status_code}. Check the API base URL.")
+
+
 # ===== Events: Airevo → us (section 4) =====
 
 
