@@ -90,6 +90,14 @@ MANAGED_KEYS = {
     "PAYPAL_CLIENT_SECRET": "PAYPAL_CLIENT_SECRET",
     # ISO currency package prices are quoted in for THIS deployment (MYR | AUD …)
     "BILLING_CURRENCY": "BILLING_CURRENCY",
+    # airevo.com.au marketplace (app/core/airevo.py). Airevo sells and bills the
+    # paid plans on the AU deployment and drives them through signed events.
+    "AIREVO_ENABLED": "AIREVO_ENABLED",              # "true" | "false"
+    "AIREVO_KEY_ID": "AIREVO_KEY_ID",                # ak_live_… (public)
+    "AIREVO_SECRET": "AIREVO_SECRET",                # sk_live_… (signs both directions)
+    "AIREVO_SECRET_PREVIOUS": "AIREVO_SECRET_PREVIOUS",  # still valid during a rotation
+    "AIREVO_API_BASE": "AIREVO_API_BASE",            # https://airevo.com.au/api/marketplace/v1
+    "AIREVO_LISTING_URL": "AIREVO_LISTING_URL",      # product page customers buy from
     # Field-level encryption key for Channel.access_token — see app/core/crypto.py.
     "FIELD_ENCRYPTION_KEY": "FIELD_ENCRYPTION_KEY",
 }
@@ -112,6 +120,8 @@ SECRET_KEYS = {
     "PAYPAL_SANDBOX_CLIENT_SECRET",
     "PAYPAL_CLIENT_SECRET",
     "FIELD_ENCRYPTION_KEY",
+    "AIREVO_SECRET",
+    "AIREVO_SECRET_PREVIOUS",
 }
 
 

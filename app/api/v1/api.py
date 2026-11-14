@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import health, auth, bots, knowledge, admin, billing, whatsapp, public, content, agent, team
+from app.api.v1.endpoints import health, auth, bots, knowledge, admin, billing, whatsapp, public, content, agent, team, airevo
 
 api_router = APIRouter()
 
@@ -23,3 +23,5 @@ api_router.include_router(whatsapp.router, prefix="/webhooks/whatsapp", tags=["w
 api_router.include_router(public.router, prefix="/public", tags=["public-widget"])
 # Public marketing-site content (homepage, pricing, CMS pages, contact)
 api_router.include_router(content.router, prefix="/content", tags=["content"])
+# airevo.com.au marketplace: signed subscription events + single sign-on (public, HMAC/one-time token)
+api_router.include_router(airevo.router, prefix="/airevo", tags=["airevo"])

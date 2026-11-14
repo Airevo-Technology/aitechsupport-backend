@@ -16,3 +16,4 @@ from app.models.game_session import GameSession  # noqa: F401
 from app.models.setting import Setting  # noqa: F401
 from app.models.email_template import EmailTemplate  # noqa: F401
 from app.models.page import Page  # noqa: F401
+from app.models.airevo_event import AirevoEvent  # noqa: F401

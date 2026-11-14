@@ -52,6 +52,11 @@ class SubscriptionOut(BaseModel):
     next_billing_date: str | None = None
     # 0-100: % off every paid checkout/renewal from active paid referrals.
     referral_discount_percent: int = 0
+    # "direct" | "airevo". For airevo, the plan is changed or cancelled on
+    # airevo.com.au (manage_url) and renews on period_end.
+    billing_source: str = "direct"
+    period_end: str | None = None
+    manage_url: str | None = None
 
 
 class ReferralItem(BaseModel):
@@ -92,6 +97,8 @@ class GatewaysOut(BaseModel):
     bank_transfer: bool
     # Gateway used when none is chosen explicitly: billplz | paypal | null.
     primary: str | None = None
+    # Set when paid plans are bought on airevo.com.au instead of a gateway here.
+    marketplace_url: str | None = None
 
 
 class CheckoutOut(BaseModel):

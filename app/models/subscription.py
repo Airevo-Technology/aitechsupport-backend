@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, ForeignKey, false
 
 from app.db.session import Base
 
@@ -30,5 +30,16 @@ class Subscription(Base):
     start_date = Column(DateTime, nullable=True)
     next_billing_date = Column(DateTime, nullable=True)
     last_reminder_sent = Column(DateTime, nullable=True)
+
+    # "direct" = billed here; "airevo" = sold and billed by airevo.com.au, whose
+    # signed events (app/core/airevo.py) set the plan and status. Direct billing
+    # (checkout, renewal reminders) leaves airevo-billed subscriptions alone.
+    billing_source = Column(String, default="direct", server_default="direct", nullable=False)
+    airevo_subscription_id = Column(Integer, unique=True, index=True, nullable=True)
+    airevo_period_end = Column(DateTime, nullable=True)
+    # `created` of the newest applied event, so an older redelivery can't undo it.
+    airevo_last_event_at = Column(Integer, nullable=True)
+    # Only accounts the marketplace created may be entered by SSO.
+    airevo_sso_allowed = Column(Boolean, default=False, server_default=false(), nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)

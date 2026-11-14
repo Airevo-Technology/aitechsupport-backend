@@ -49,7 +49,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 RESET_TOKEN_EXPIRE_MINUTES = 30
 
 
-def create_reset_token(user_id: int, current_hashed_password: str) -> str:
+def create_reset_token(user_id: int, current_hashed_password: str, expires_minutes: int = RESET_TOKEN_EXPIRE_MINUTES) -> str:
     """Short-lived, single-purpose token for password reset.
 
     Includes a fingerprint of the current password hash so the token is
@@ -57,7 +57,7 @@ def create_reset_token(user_id: int, current_hashed_password: str) -> str:
     changed some other way) — no separate revocation table needed.
     """
     fp = hashlib.sha256(current_hashed_password.encode()).hexdigest()[:16]
-    expire = datetime.utcnow() + timedelta(minutes=RESET_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.utcnow() + timedelta(minutes=expires_minutes)
     to_encode = {"sub": str(user_id), "type": "password_reset", "pwd_fp": fp, "exp": expire}
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 

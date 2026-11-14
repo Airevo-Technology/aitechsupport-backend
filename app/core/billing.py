@@ -81,8 +81,16 @@ def tokens_remaining(db: Session, sub: Subscription) -> int:
 
 
 def has_quota(db: Session, sub: Subscription) -> bool:
-    """True if the org can still spend tokens (quota 0 is treated as 'no allowance')."""
-    return tokens_remaining(db, sub) > 0
+    """True if the org can still spend tokens (quota 0 is treated as 'no allowance').
+
+    A subscription that isn't active (airevo.com.au suspended it after a failed
+    renewal) has no allowance either: the bots stop answering, the data stays."""
+    return sub.status == "active" and tokens_remaining(db, sub) > 0
+
+
+def is_airevo_billed(sub: Subscription | None) -> bool:
+    """Plan is sold and renewed by airevo.com.au, not by this deployment."""
+    return sub is not None and sub.billing_source == "airevo"
 
 
 def record_usage(db: Session, organization_id: int, tokens: int, messages: int = 1) -> None:
@@ -679,6 +687,7 @@ def subscriptions_due_for_reminder(db: Session, within_days: int = 3) -> list[Su
             Subscription.next_billing_date.isnot(None),
             Subscription.next_billing_date <= cutoff,
             Subscription.plan != DEFAULT_PLAN,
+            Subscription.billing_source != "airevo",
             (Subscription.last_reminder_sent.is_(None))
             | (Subscription.last_reminder_sent < Subscription.next_billing_date - timedelta(days=PERIOD_DAYS)),
         )

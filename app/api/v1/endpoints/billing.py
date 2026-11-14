@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.api.deps import get_current_user
-from app.core import billing, paypal, storage, email as email_service
+from app.core import airevo, billing, paypal, storage, email as email_service
 from app.models.user import User
 from app.core.settings import settings
 from app.models.organization import Organization
@@ -42,6 +42,15 @@ def list_packages(db: Session = Depends(get_db), user: User = Depends(get_curren
     )
 
 
+def _guard_direct_billing(sub, pkg: Package) -> None:
+    """airevo.com.au owns the plan for airevo-billed subscriptions, and sells every
+    paid plan when the marketplace is switched on for this deployment."""
+    if billing.is_airevo_billed(sub):
+        raise HTTPException(status_code=409, detail="Your plan is managed on airevo.com.au. Change or cancel it there.")
+    if pkg.price_myr > 0 and airevo.sells_paid_plans():
+        raise HTTPException(status_code=409, detail="Paid plans are sold through airevo.com.au.")
+
+
 def _subscription_out(db: Session, sub) -> SubscriptionOut:
     pkg = billing.package_for(db, sub.plan)
     quota = pkg.monthly_token_quota if pkg else 0
@@ -56,6 +65,9 @@ def _subscription_out(db: Session, sub) -> SubscriptionOut:
         period_start=sub.period_start.isoformat() if sub.period_start else None,
         next_billing_date=sub.next_billing_date.isoformat() if sub.next_billing_date else None,
         referral_discount_percent=billing.referral_discount_percent(db, sub.organization_id),
+        billing_source=sub.billing_source or "direct",
+        period_end=sub.airevo_period_end.isoformat() if sub.airevo_period_end else None,
+        manage_url=airevo.manage_url(sub) if billing.is_airevo_billed(sub) else None,
     )
 
 
@@ -75,6 +87,7 @@ def subscribe(payload: SubscribeRequest, db: Session = Depends(get_db), user: Us
         raise HTTPException(status_code=403, detail="Only an owner can change the plan")
 
     sub = billing.get_or_create_subscription(db, user.organization_id)
+    _guard_direct_billing(sub, pkg)
     # No-op re-subscribe is rejected so it can't be used to reset the usage window.
     if pkg.slug == sub.plan:
         raise HTTPException(status_code=400, detail="You're already on this plan.")
@@ -105,6 +118,7 @@ def checkout(payload: SubscribeRequest, db: Session = Depends(get_db), user: Use
         raise HTTPException(status_code=403, detail="Only an owner can change the plan")
 
     sub = billing.get_or_create_subscription(db, user.organization_id)
+    _guard_direct_billing(sub, pkg)
     # Re-selecting your current *paid* plan is a renewal payment; free has nothing to pay.
     if pkg.slug == sub.plan and pkg.price_myr <= 0:
         raise HTTPException(status_code=400, detail="You're already on this plan.")
@@ -174,7 +188,7 @@ def my_referrals(db: Session = Depends(get_db), user: User = Depends(get_current
 def gateways(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Which payment methods are live on this deployment + its currency."""
     avail = billing.available_gateways(db)
-    return GatewaysOut(**avail, primary=billing.primary_gateway(avail))
+    return GatewaysOut(**avail, primary=billing.primary_gateway(avail), marketplace_url=airevo.listing_url() if airevo.sells_paid_plans() else None)
 
 
 @router.post("/paypal/capture", response_model=PayPalCaptureOut)
@@ -255,6 +269,7 @@ def report_bank_transfer(
         raise HTTPException(status_code=404, detail="Package not found")
     if user.role not in ("owner", "admin"):
         raise HTTPException(status_code=403, detail="Only an owner can change the plan")
+    _guard_direct_billing(billing.get_or_create_subscription(db, user.organization_id), pkg)
     if not billing.bank_transfer_is_configured(db):
         raise HTTPException(status_code=503, detail="Bank transfer isn't enabled — contact us to activate a paid plan.")
 
