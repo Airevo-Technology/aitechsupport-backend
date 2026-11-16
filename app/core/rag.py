@@ -198,10 +198,12 @@ def answer_question_stream(
     agents_online: bool,
     image_key: str | None = None,
     image_mime: str | None = None,
+    system_suffix: str = "",
 ):
     """Streaming twin of answer_question. Yields {'type':'delta'|'final', ...} events;
     the terminal 'final' carries the full text + tokens for persistence/metering.
     Nothing to answer with -> the composed handoff message, streamed, 0 tokens.
+    `system_suffix` is appended to the bot's system prompt (channel style, e.g. spoken replies).
     """
     prepared = _prepare(db, bot, question, image_key, image_mime)
     if prepared is None:
@@ -209,5 +211,5 @@ def answer_question_stream(
         return
     context, q, candidates, image_data_url = prepared
     yield from llm.answer_stream_with_fallback(
-        bot.system_prompt or "", context, q, candidates, image_data_url=image_data_url
+        (bot.system_prompt or "") + system_suffix, context, q, candidates, image_data_url=image_data_url
     )
