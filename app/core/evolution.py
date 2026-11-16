@@ -59,7 +59,8 @@ def _request(method: str, path: str, json: dict | None = None) -> dict:
 
 
 def webhook_config(url: str) -> dict:
-    return {"url": url, "byEvents": False, "base64": False, "events": WEBHOOK_EVENTS}
+    # `enabled` is required by /webhook/set on Evolution v2.3.x (400 without it).
+    return {"enabled": True, "url": url, "byEvents": False, "base64": False, "events": WEBHOOK_EVENTS}
 
 
 def create_instance(name: str, webhook_url: str) -> dict:
