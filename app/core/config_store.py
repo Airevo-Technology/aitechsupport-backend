@@ -80,6 +80,7 @@ MANAGED_KEYS = {
     # In-process bge-m3 query embeddings (see app/core/local_embed.py)
     "QUERY_EMBEDDINGS_LOCAL": "QUERY_EMBEDDINGS_LOCAL",  # "true" to embed questions on this server's CPU
     "LOCAL_EMBED_MODEL_DIR": "LOCAL_EMBED_MODEL_DIR",    # default ~/models/bge-m3
+    "FIRST_TOKEN_TIMEOUT_MS": "FIRST_TOKEN_TIMEOUT_MS",  # streamed chat: fail over if no first token in N ms (0/unset = off)
     # PayPal (international card/PayPal collections, e.g. Australia)
     "PAYPAL_ENABLED": "PAYPAL_ENABLED",          # "true" | "false"
     "PAYPAL_SANDBOX": "PAYPAL_SANDBOX",          # "true" | "false"

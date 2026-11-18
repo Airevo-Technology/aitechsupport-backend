@@ -7,6 +7,8 @@ resolve through config_store (admin DB setting first, then env).
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 import time
 
 import httpx
@@ -207,6 +209,70 @@ def answer_stream(
     yield {"type": "final", "text": full, "tokens": tokens}
 
 
+class FirstTokenTimeout(TimeoutError):
+    """A streamed candidate produced no content within the first-token budget."""
+
+
+def first_token_budget() -> float | None:
+    """Seconds a streamed candidate gets to emit its FIRST content token before we move on
+    to the next one (admin/env FIRST_TOKEN_TIMEOUT_MS; unset or 0 = off). Voice and live chat
+    care about the median AND the tail: one stalled provider call otherwise adds seconds."""
+    raw = (config_store.get("FIRST_TOKEN_TIMEOUT_MS") or "").strip()
+    try:
+        ms = float(raw)
+    except ValueError:
+        return None
+    return ms / 1000.0 if ms > 0 else None
+
+
+def _with_first_token_deadline(events, budget_s: float, label: str):
+    """Re-yield `events`, raising FirstTokenTimeout if no 'delta' arrives within `budget_s`.
+
+    The model stream is a blocking network read (OpenRouter sends keep-alive bytes while a
+    model is still thinking, so a socket read timeout never fires), so it runs in a pump
+    thread and we wait on a queue with a wall-clock deadline. After a timeout the thread is
+    told to stop and closes the stream as soon as the provider next sends something; that
+    abandoned generation is not metered. Once the first delta has arrived there is no
+    deadline: the visitor is already hearing the answer.
+    """
+    q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+
+    def pump() -> None:
+        try:
+            for ev in events:
+                if stop.is_set():
+                    break
+                q.put(("ev", ev))
+            q.put(("end", None))
+        except Exception as e:  # noqa: BLE001 — surfaced to the consumer
+            q.put(("err", e))
+        finally:
+            close = getattr(events, "close", None)
+            if close:
+                close()
+
+    threading.Thread(target=pump, name="llm-stream-pump", daemon=True).start()
+    deadline = time.monotonic() + budget_s
+    seen_delta = False
+    try:
+        while True:
+            wait = None if seen_delta else max(0.0, deadline - time.monotonic())
+            try:
+                kind, val = q.get(timeout=wait)
+            except queue.Empty:
+                raise FirstTokenTimeout(f"{label}: no first token within {budget_s * 1000:.0f} ms") from None
+            if kind == "end":
+                return
+            if kind == "err":
+                raise val
+            if val.get("type") == "delta":
+                seen_delta = True
+            yield val
+    finally:
+        stop.set()
+
+
 class AllCandidatesFailed(Exception):
     """Every candidate in a fallback chain errored; carries each (model, error)."""
 
@@ -268,14 +334,20 @@ def answer_stream_with_fallback(
     than silently restarted on a different model.
     """
     errors: list[tuple[str, Exception]] = []
-    for model, base_url in candidates:
+    budget = first_token_budget()
+    for idx, (model, base_url) in enumerate(candidates):
         content_seen = False
         t0 = time.monotonic()
         try:
-            for ev in answer_stream(
+            events = answer_stream(
                 system_prompt, context, question, model=model,
                 image_data_url=image_data_url, base_url=base_url,
-            ):
+            )
+            # The LAST candidate is exempt: a slow answer beats none, and vision turns
+            # legitimately need a long cold start.
+            if budget and idx < len(candidates) - 1 and not image_data_url:
+                events = _with_first_token_deadline(events, budget, model)
+            for ev in events:
                 if ev.get("type") == "delta":
                     content_seen = True
                     yield ev
