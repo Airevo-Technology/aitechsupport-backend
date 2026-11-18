@@ -318,6 +318,140 @@ def answer_with_fallback(
     raise AllCandidatesFailed(errors)
 
 
+MAX_HEDGE_PARALLEL = 2  # never run more than this many model calls at once for one answer
+
+
+def hedge_delay() -> float | None:
+    """Platform default hedge delay in seconds (admin/env HEDGE_AFTER_MS; unset or 0 = off)."""
+    raw = (config_store.get("HEDGE_AFTER_MS") or "").strip()
+    try:
+        ms = float(raw)
+    except ValueError:
+        return None
+    return ms / 1000.0 if ms > 0 else None
+
+
+def _hedged_stream(candidates: list[tuple[str, str | None]], make_events, hedge_s: float):
+    """Race candidates to the first content token (a "hedged request").
+
+    Candidate 0 starts immediately. If it has not emitted a content delta after `hedge_s`,
+    the next candidate starts ALONGSIDE it (still running), and so on, with at most
+    MAX_HEDGE_PARALLEL calls in flight. An outright failure or an empty answer starts the
+    next candidate at once instead of waiting for the timer. The first content delta wins:
+    every other call is told to stop and its output is dropped (never shown, never metered).
+    Once a winner is chosen a later failure is re-raised, as in the sequential path.
+
+    Why: sequential failover costs (deadline + next model's first token) on a slow call;
+    hedging costs only (hedge delay + the faster model's first token).
+    """
+    n = len(candidates)
+    q: queue.Queue = queue.Queue()
+    stops = [threading.Event() for _ in range(n)]
+    started_at: dict[int, float] = {}
+    running: set[int] = set()
+    errors: list[tuple[str, Exception]] = []
+    saw_delta: set[int] = set()
+    next_i = 0
+    winner: int | None = None
+
+    def pump(i: int) -> None:
+        events = None
+        try:
+            events = make_events(i)
+            for ev in events:
+                if stops[i].is_set():
+                    break
+                q.put((i, "ev", ev))
+            q.put((i, "end", None))
+        except Exception as e:  # noqa: BLE001 — surfaced to the consumer
+            q.put((i, "err", e))
+        finally:
+            close = getattr(events, "close", None)
+            if close:
+                close()
+
+    def start_next() -> None:
+        nonlocal next_i
+        i = next_i
+        next_i += 1
+        running.add(i)
+        started_at[i] = time.monotonic()
+        threading.Thread(target=pump, args=(i,), name=f"llm-hedge-{i}", daemon=True).start()
+
+    def fail(i: int, err: Exception) -> None:
+        running.discard(i)
+        errors.append((candidates[i][0], err))
+        logger.warning("chat candidate %s failed after %.1fs (hedged): %s",
+                       candidates[i][0], time.monotonic() - started_at[i], err)
+
+    start_next()
+    hedge_at = time.monotonic() + hedge_s
+    try:
+        while True:
+            if winner is None and not running and next_i >= n:
+                raise AllCandidatesFailed(errors)
+            wait = None
+            if winner is None and next_i < n:
+                wait = max(0.0, hedge_at - time.monotonic())
+            try:
+                i, kind, val = q.get(timeout=wait)
+            except queue.Empty:
+                if len(running) < MAX_HEDGE_PARALLEL:
+                    logger.info("hedging: %s silent after %.0f ms, also starting %s",
+                                candidates[min(running)][0] if running else "?", hedge_s * 1000, candidates[next_i][0])
+                    start_next()
+                hedge_at = time.monotonic() + hedge_s
+                continue
+            if winner is not None and i != winner:
+                continue  # a loser's late output is dropped
+            if kind == "err":
+                if winner == i:
+                    raise val  # content already reached the caller; do not restart on another model
+                fail(i, val)
+                if winner is None and next_i < n and len(running) < MAX_HEDGE_PARALLEL:
+                    start_next()
+                    hedge_at = time.monotonic() + hedge_s
+                continue
+            if kind == "end":
+                if winner == i:
+                    logger.info("chat candidate %s streamed in %.1fs (hedged)", candidates[i][0], time.monotonic() - started_at[i])
+                    return
+                if i in running:  # ended without ever showing content
+                    fail(i, ValueError(f"{candidates[i][0]} produced no content (reasoning-only or empty response)"))
+                    if winner is None and next_i < n and len(running) < MAX_HEDGE_PARALLEL:
+                        start_next()
+                        hedge_at = time.monotonic() + hedge_s
+                continue
+            # kind == "ev"
+            if val.get("type") == "delta":
+                saw_delta.add(i)
+                if winner is None:
+                    winner = i
+                    for j in range(n):
+                        if j != i:
+                            stops[j].set()
+                    if i != 0 or len(started_at) > 1:
+                        logger.info("hedging: %s won the race", candidates[i][0])
+                yield val
+                continue
+            # 'final'
+            if i not in saw_delta and not (val.get("text") or "").strip():
+                fail(i, ValueError(f"{candidates[i][0]} produced no content (reasoning-only or empty response)"))
+                if winner is None and next_i < n and len(running) < MAX_HEDGE_PARALLEL:
+                    start_next()
+                    hedge_at = time.monotonic() + hedge_s
+                continue
+            if winner is None:
+                winner = i
+                for j in range(n):
+                    if j != i:
+                        stops[j].set()
+            yield val
+    finally:
+        for e in stops:
+            e.set()
+
+
 def answer_stream_with_fallback(
     system_prompt: str,
     context: str,
@@ -325,6 +459,7 @@ def answer_stream_with_fallback(
     candidates: list[tuple[str, str | None]],
     image_data_url: str | None = None,
     first_token_s: float | None = None,
+    hedge_s: float | None = None,
 ):
     """Streaming twin of answer_with_fallback. Only falls back to the next
     candidate if the CURRENT one fails before yielding any delta content, OR
@@ -334,6 +469,17 @@ def answer_stream_with_fallback(
     the visitor may already be seeing it, so a later failure is re-raised rather
     than silently restarted on a different model.
     """
+    # Hedged racing (caller value overrides the platform setting; 0 = off) supersedes the
+    # sequential first-token deadline. Vision turns and single-candidate chains stay sequential.
+    hedge = hedge_s if hedge_s is not None else hedge_delay()
+    if hedge and len(candidates) > 1 and not image_data_url:
+        def make_events(i: int):
+            m, b = candidates[i]
+            return answer_stream(system_prompt, context, question, model=m, image_data_url=None, base_url=b)
+
+        yield from _hedged_stream(candidates, make_events, hedge)
+        return
+
     errors: list[tuple[str, Exception]] = []
     # A caller-supplied budget (e.g. voice) overrides the platform setting; 0 turns it off.
     budget = first_token_s if first_token_s is not None else first_token_budget()

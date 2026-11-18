@@ -6,6 +6,12 @@ import pytest
 from app.core import llm
 
 
+@pytest.fixture(autouse=True)
+def _no_platform_hedge(monkeypatch):
+    # These tests cover the sequential first-token deadline; hedging is tested in test_hedged_stream.py.
+    monkeypatch.setattr(llm, "hedge_delay", lambda: None)
+
+
 def _fake_stream(delay_first: float, pieces=("hello", " world"), gap: float = 0.0):
     def gen(*_a, **_k):
         time.sleep(delay_first)

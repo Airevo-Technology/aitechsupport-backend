@@ -82,6 +82,8 @@ MANAGED_KEYS = {
     "LOCAL_EMBED_MODEL_DIR": "LOCAL_EMBED_MODEL_DIR",    # default ~/models/bge-m3
     "FIRST_TOKEN_TIMEOUT_MS": "FIRST_TOKEN_TIMEOUT_MS",  # streamed chat: fail over if no first token in N ms (0/unset = off)
     "VOICE_FIRST_TOKEN_TIMEOUT_MS": "VOICE_FIRST_TOKEN_TIMEOUT_MS",  # voice replies: first-token deadline (default 1000; 0 = off)
+    "HEDGE_AFTER_MS": "HEDGE_AFTER_MS",                    # streamed chat: start the next model after N ms of silence, first token wins (0/unset = off)
+    "VOICE_HEDGE_MS": "VOICE_HEDGE_MS",                    # voice replies: hedge delay (default 400; 0 = off)
     # PayPal (international card/PayPal collections, e.g. Australia)
     "PAYPAL_ENABLED": "PAYPAL_ENABLED",          # "true" | "false"
     "PAYPAL_SANDBOX": "PAYPAL_SANDBOX",          # "true" | "false"

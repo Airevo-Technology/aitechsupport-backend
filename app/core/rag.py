@@ -200,12 +200,14 @@ def answer_question_stream(
     image_mime: str | None = None,
     system_suffix: str = "",
     first_token_s: float | None = None,
+    hedge_s: float | None = None,
 ):
     """Streaming twin of answer_question. Yields {'type':'delta'|'final', ...} events;
     the terminal 'final' carries the full text + tokens for persistence/metering.
     Nothing to answer with -> the composed handoff message, streamed, 0 tokens.
     `system_suffix` is appended to the bot's system prompt (channel style, e.g. spoken replies).
-    `first_token_s` overrides the platform first-token deadline for this call (0 = off).
+    `first_token_s` overrides the platform first-token deadline for this call (0 = off);
+    `hedge_s` overrides the hedged-request delay (0 = off; supersedes first_token_s when on).
     """
     prepared = _prepare(db, bot, question, image_key, image_mime)
     if prepared is None:
@@ -214,5 +216,5 @@ def answer_question_stream(
     context, q, candidates, image_data_url = prepared
     yield from llm.answer_stream_with_fallback(
         (bot.system_prompt or "") + system_suffix, context, q, candidates,
-        image_data_url=image_data_url, first_token_s=first_token_s,
+        image_data_url=image_data_url, first_token_s=first_token_s, hedge_s=hedge_s,
     )

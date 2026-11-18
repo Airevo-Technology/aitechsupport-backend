@@ -31,8 +31,8 @@ def fakes(monkeypatch):
     monkeypatch.setattr(voice.presence, "has_available_agent", lambda db, org: False)
     seen = {}
 
-    def fake_stream(db, b, question, online, system_suffix="", first_token_s=None):
-        seen.update(question=question, suffix=system_suffix, first_token_s=first_token_s)
+    def fake_stream(db, b, question, online, system_suffix="", first_token_s=None, hedge_s=None):
+        seen.update(question=question, suffix=system_suffix, first_token_s=first_token_s, hedge_s=hedge_s)
         yield {"type": "delta", "text": "We open at "}
         yield {"type": "delta", "text": "nine."}
         yield {"type": "final", "text": "We open at nine.", "tokens": 42}
@@ -176,3 +176,14 @@ def test_voice_budget_setting(monkeypatch, raw, want):
 
 def test_voice_style_forbids_inventing_earlier_speech():
     assert "Never claim you said" in voice.VOICE_STYLE
+
+
+def test_voice_hedge_defaults_to_400ms_and_is_passed_to_rag(client, fakes):
+    client.post(URL, headers=AUTH, json=BODY)
+    assert fakes["hedge_s"] == 0.4
+
+
+@pytest.mark.parametrize("raw,want", [("", 0.4), ("250", 0.25), ("0", 0.0), ("abc", 0.4), ("-1", 0.0)])
+def test_voice_hedge_setting(monkeypatch, raw, want):
+    monkeypatch.setattr(voice.config_store, "get", lambda k, d="": raw if k == "VOICE_HEDGE_MS" else d)
+    assert voice._voice_hedge_s() == want

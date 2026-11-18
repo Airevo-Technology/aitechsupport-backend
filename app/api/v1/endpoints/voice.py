@@ -51,6 +51,9 @@ FALLBACK_SPEECH = "Sorry, I'm having a little trouble right now. Let me get some
 # Voice replies must start fast; a stalled model call is abandoned after this long (ms) and the
 # next model in the chain answers. Admin/env VOICE_FIRST_TOKEN_TIMEOUT_MS tunes it; 0 turns it off.
 DEFAULT_VOICE_FIRST_TOKEN_MS = 1000.0
+# Preferred over the deadline above: after this long with no first token, race the next model
+# alongside the slow one and take whichever speaks first. VOICE_HEDGE_MS tunes it; 0 turns it off.
+DEFAULT_VOICE_HEDGE_MS = 400.0
 
 # "Say that again" style requests. Handled without the model: the model only ever sees the last
 # user turn here, so it cannot know what was said before and used to invent it. Replaying the
@@ -111,6 +114,15 @@ def _voice_first_token_s() -> float:
     return max(ms, 0.0) / 1000.0
 
 
+def _voice_hedge_s() -> float:
+    raw = (config_store.get("VOICE_HEDGE_MS") or "").strip()
+    try:
+        ms = float(raw) if raw else DEFAULT_VOICE_HEDGE_MS
+    except ValueError:
+        ms = DEFAULT_VOICE_HEDGE_MS
+    return max(ms, 0.0) / 1000.0
+
+
 def _repeat_reply(messages: list["_Message"], question: str) -> str | None:
     """The spoken reply for a "say that again" turn, or None if this is a normal question."""
     if not is_repeat_request(question):
@@ -146,7 +158,8 @@ def _reply_events(bot_id: int, question: str) -> Iterator[dict]:
             raise LookupError(f"bot {bot_id} not found")
         online = presence.has_available_agent(db, bot.organization_id)
         for ev in rag.answer_question_stream(
-            db, bot, question, online, system_suffix=VOICE_STYLE, first_token_s=_voice_first_token_s()
+            db, bot, question, online, system_suffix=VOICE_STYLE,
+            first_token_s=_voice_first_token_s(), hedge_s=_voice_hedge_s(),
         ):
             if ev["type"] == "delta":
                 if not spoke:
