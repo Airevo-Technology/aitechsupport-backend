@@ -77,6 +77,9 @@ MANAGED_KEYS = {
     "EVOLUTION_BASE_URL": "EVOLUTION_BASE_URL",
     "EVOLUTION_API_KEY": "EVOLUTION_API_KEY",
     "WHATSAPP_DEFAULT_PROVIDER": "WHATSAPP_DEFAULT_PROVIDER",  # fonnte | evolution
+    # In-process bge-m3 query embeddings (see app/core/local_embed.py)
+    "QUERY_EMBEDDINGS_LOCAL": "QUERY_EMBEDDINGS_LOCAL",  # "true" to embed questions on this server's CPU
+    "LOCAL_EMBED_MODEL_DIR": "LOCAL_EMBED_MODEL_DIR",    # default ~/models/bge-m3
     # PayPal (international card/PayPal collections, e.g. Australia)
     "PAYPAL_ENABLED": "PAYPAL_ENABLED",          # "true" | "false"
     "PAYPAL_SANDBOX": "PAYPAL_SANDBOX",          # "true" | "false"

@@ -32,3 +32,7 @@ redis
 
 # Google Search Console (admin SEO panel) — service-account auth
 google-auth
+# Optional in-process bge-m3 query embeddings (app/core/local_embed.py)
+onnxruntime
+tokenizers
+numpy

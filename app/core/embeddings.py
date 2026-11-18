@@ -25,10 +25,13 @@ cosine distance in pgvector behaves consistently.
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 
 from app.core.settings import settings
-from app.core import config_store
+from app.core import config_store, local_embed
+
+logger = logging.getLogger(__name__)
 
 
 def _l2_normalize(vec: list[float]) -> list[float]:
@@ -229,6 +232,11 @@ def embed_query(text: str) -> list[float]:
     provider = _provider()
     if provider == "fake":
         return _fake_embed(text, settings.EMBEDDING_DIM)
+    if local_embed.enabled():
+        try:
+            return local_embed.embed_query(text)
+        except Exception:  # noqa: BLE001 — retrieval must keep working; use the provider below
+            logger.warning("local query embedding failed; falling back to %s", provider, exc_info=True)
     if provider == "ollama":
         return _ollama_embed([text])[0]
     if provider == "openrouter":

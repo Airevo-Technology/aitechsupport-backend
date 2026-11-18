@@ -2,6 +2,8 @@
 
 Run: uvicorn main:app --reload --port 8100
 """
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.db.session import engine, Base
@@ -19,7 +21,15 @@ setup_logging(level=settings.LOG_LEVEL, noisy_level=settings.LOG_LEVEL_HTTP)
 import app.models  # noqa: F401 — register all models on Base.metadata
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title=settings.PROJECT_NAME)
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    from app.core import local_embed
+
+    local_embed.preload_in_background()  # no-op unless QUERY_EMBEDDINGS_LOCAL is on
+    yield
+
+
+app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
 
 # Dashboard/API paths use the static credentialed allowlist; public widget paths
 # get per-bot dynamic (credential-less) CORS — see app/core/cors.py.
