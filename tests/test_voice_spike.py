@@ -31,8 +31,8 @@ def fakes(monkeypatch):
     monkeypatch.setattr(voice.presence, "has_available_agent", lambda db, org: False)
     seen = {}
 
-    def fake_stream(db, b, question, online, system_suffix="", first_token_s=None, hedge_s=None):
-        seen.update(question=question, suffix=system_suffix, first_token_s=first_token_s, hedge_s=hedge_s)
+    def fake_stream(db, b, question, online, system_suffix="", first_token_s=None, hedge_s=None, history=None):
+        seen.update(question=question, history=history, suffix=system_suffix, first_token_s=first_token_s, hedge_s=hedge_s)
         yield {"type": "delta", "text": "We open at "}
         yield {"type": "delta", "text": "nine."}
         yield {"type": "final", "text": "We open at nine.", "tokens": 42}
@@ -187,3 +187,36 @@ def test_voice_hedge_defaults_to_400ms_and_is_passed_to_rag(client, fakes):
 def test_voice_hedge_setting(monkeypatch, raw, want):
     monkeypatch.setattr(voice.config_store, "get", lambda k, d="": raw if k == "VOICE_HEDGE_MS" else d)
     assert voice._voice_hedge_s() == want
+
+
+def test_earlier_turns_are_passed_as_history(client, fakes):
+    body = {"stream": True, "messages": [
+        {"role": "system", "content": "agent prompt"},
+        {"role": "user", "content": "What are your opening hours?"},
+        {"role": "assistant", "content": "We open at nine."},
+        {"role": "user", "content": "What about Sundays?"},
+    ]}
+    assert client.post(URL, json=body, headers=AUTH).status_code == 200
+    assert fakes["question"] == "What about Sundays?"
+    assert fakes["history"] == [
+        {"role": "user", "content": "What are your opening hours?"},
+        {"role": "assistant", "content": "We open at nine."},
+    ]
+
+
+def test_history_is_capped_and_trimmed(client, fakes):
+    turns = []
+    for i in range(10):
+        turns.append({"role": "user", "content": f"q{i} " + "x" * 2000})
+        turns.append({"role": "assistant", "content": f"a{i}"})
+    body = {"stream": True, "messages": turns + [{"role": "user", "content": "and now?"}]}
+    client.post(URL, json=body, headers=AUTH)
+    hist = fakes["history"]
+    assert len(hist) == voice.HISTORY_MAX_MESSAGES
+    assert all(len(h["content"]) <= voice.HISTORY_MAX_CHARS for h in hist)
+    assert hist[-1] == {"role": "assistant", "content": "a9"}
+
+
+def test_first_turn_has_no_history(client, fakes):
+    client.post(URL, json=BODY, headers=AUTH)
+    assert fakes["history"] == []

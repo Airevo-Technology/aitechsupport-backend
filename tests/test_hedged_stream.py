@@ -33,7 +33,7 @@ def boom(delay=0.0):
 def run(monkeypatch, plans, hedge, **kw):
     started, lock = [], threading.Lock()
 
-    def fake(system_prompt, context, question, model, image_data_url=None, base_url=None):
+    def fake(system_prompt, context, question, model, image_data_url=None, base_url=None, history=None):
         with lock:
             started.append(model)
         return plans[model]()

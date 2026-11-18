@@ -131,6 +131,22 @@ def _repeat_reply(messages: list["_Message"], question: str) -> str | None:
     return f"Sure. {prior}" if prior else _NO_HISTORY_REPLY
 
 
+HISTORY_MAX_MESSAGES = 6   # last three exchanges is plenty for a phone call
+HISTORY_MAX_CHARS = 600    # per message; keeps the prompt (and first-token time) small
+
+
+def _history(messages: list["_Message"]) -> list[dict]:
+    """Earlier user/assistant turns (everything before the final user message), trimmed.
+    The caller's own system prompt is ignored — the bot's prompt is authoritative."""
+    last = max((i for i, m in enumerate(messages) if m.role == "user"), default=-1)
+    turns = [
+        {"role": m.role, "content": _text(m.content).strip()[:HISTORY_MAX_CHARS]}
+        for m in messages[:last]
+        if m.role in ("user", "assistant") and _text(m.content).strip()
+    ]
+    return turns[-HISTORY_MAX_MESSAGES:]
+
+
 def _canned_events(text: str) -> Iterator[dict]:
     yield {"type": "delta", "text": text}
     yield {"type": "final", "text": text, "tokens": 0}
@@ -140,7 +156,7 @@ def _load_bot(db: Session, bot_id: int) -> Bot | None:
     return db.query(Bot).filter(Bot.id == bot_id).first()
 
 
-def _reply_events(bot_id: int, question: str) -> Iterator[dict]:
+def _reply_events(bot_id: int, question: str, history: list[dict] | None = None) -> Iterator[dict]:
     """Yield rag 'delta' events then a 'final' event, on a fresh DB session while holding
     an inference slot (the request session closes before a streaming body finishes).
     Any failure becomes a spoken apology instead of a broken stream."""
@@ -159,7 +175,7 @@ def _reply_events(bot_id: int, question: str) -> Iterator[dict]:
         online = presence.has_available_agent(db, bot.organization_id)
         for ev in rag.answer_question_stream(
             db, bot, question, online, system_suffix=VOICE_STYLE,
-            first_token_s=_voice_first_token_s(), hedge_s=_voice_hedge_s(),
+            first_token_s=_voice_first_token_s(), hedge_s=_voice_hedge_s(), history=history,
         ):
             if ev["type"] == "delta":
                 if not spoke:
@@ -203,9 +219,10 @@ def chat_completions(
         raise HTTPException(status_code=400, detail="No user message")
     cid = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     repeat = _repeat_reply(payload.messages, question)
+    history = _history(payload.messages)
 
     def events() -> Iterator[dict]:
-        return _canned_events(repeat) if repeat is not None else _reply_events(bot_id, question)
+        return _canned_events(repeat) if repeat is not None else _reply_events(bot_id, question, history)
 
     if not payload.stream:
         text, tokens = "", 0

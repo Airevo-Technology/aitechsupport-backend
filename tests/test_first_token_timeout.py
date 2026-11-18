@@ -26,7 +26,7 @@ def _run(monkeypatch, plans, budget_ms):
     """plans: {model: stream-fn}. Returns (events, models_started)."""
     started: list[str] = []
 
-    def fake_answer_stream(system_prompt, context, question, model, image_data_url=None, base_url=None):
+    def fake_answer_stream(system_prompt, context, question, model, image_data_url=None, base_url=None, history=None):
         started.append(model)
         return plans[model]()
 
@@ -88,7 +88,7 @@ def test_all_slow_raises_nothing_extra_when_last_succeeds(monkeypatch):
 
 def test_per_call_budget_overrides_platform_setting(monkeypatch):
     plans = {"slow": lambda: _fake_stream(1.0)(), "fast": lambda: _fake_stream(0.0, ("quick",))()}
-    monkeypatch.setattr(llm, "answer_stream", lambda s, c, q, model, image_data_url=None, base_url=None: plans[model]())
+    monkeypatch.setattr(llm, "answer_stream", lambda s, c, q, model, image_data_url=None, base_url=None, history=None: plans[model]())
     monkeypatch.setattr(llm, "first_token_budget", lambda: None)  # platform: off
     t0 = time.monotonic()
     events = list(llm.answer_stream_with_fallback("s", "c", "q", [("slow", None), ("fast", None)], first_token_s=0.1))
@@ -97,7 +97,7 @@ def test_per_call_budget_overrides_platform_setting(monkeypatch):
 
 def test_per_call_zero_disables_platform_budget(monkeypatch):
     plans = {"a": lambda: _fake_stream(0.4, ("late",))(), "b": lambda: _fake_stream(0.0, ("nope",))()}
-    monkeypatch.setattr(llm, "answer_stream", lambda s, c, q, model, image_data_url=None, base_url=None: plans[model]())
+    monkeypatch.setattr(llm, "answer_stream", lambda s, c, q, model, image_data_url=None, base_url=None, history=None: plans[model]())
     monkeypatch.setattr(llm, "first_token_budget", lambda: 0.1)  # platform: on
     events = list(llm.answer_stream_with_fallback("s", "c", "q", [("a", None), ("b", None)], first_token_s=0))
     assert text_of(events) == "late"

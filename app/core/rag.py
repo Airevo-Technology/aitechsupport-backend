@@ -59,8 +59,21 @@ def retrieve(db: Session, bot: Bot, question: str, k: int | None = None) -> list
     )
 
 
+FOLLOWUP_MAX_WORDS = 6
+
+
+def followup_query(question: str, history: list[dict] | None) -> str:
+    """Text to embed for retrieval. A short question after earlier turns ("what about Sundays?")
+    is ambiguous alone, so prefix the most recent earlier user question."""
+    if not history or len(question.split()) > FOLLOWUP_MAX_WORDS:
+        return question
+    prev = next((h["content"] for h in reversed(history) if h.get("role") == "user" and h.get("content")), "")
+    return f"{prev} {question}".strip() if prev else question
+
+
 def _prepare(
-    db: Session, bot: Bot, question: str, image_key: str | None, image_mime: str | None
+    db: Session, bot: Bot, question: str, image_key: str | None, image_mime: str | None,
+    retrieval_query: str | None = None,
 ):
     """Shared setup for both answer paths.
 
@@ -81,7 +94,7 @@ def _prepare(
     use_vision = bool(image_key) and models_catalog.vision_enabled()
     image_data_url = _image_data_url(db, image_key, image_mime) if use_vision else None
     # Nothing to embed for a captionless image, and embedding "" is meaningless.
-    chunks = retrieve(db, bot, question) if question.strip() else []
+    chunks = retrieve(db, bot, retrieval_query or question) if question.strip() else []
     if not chunks and image_data_url is None:
         return None
     context = "\n\n---\n\n".join(c.content for c in chunks)
@@ -201,6 +214,7 @@ def answer_question_stream(
     system_suffix: str = "",
     first_token_s: float | None = None,
     hedge_s: float | None = None,
+    history: list[dict] | None = None,
 ):
     """Streaming twin of answer_question. Yields {'type':'delta'|'final', ...} events;
     the terminal 'final' carries the full text + tokens for persistence/metering.
@@ -208,13 +222,17 @@ def answer_question_stream(
     `system_suffix` is appended to the bot's system prompt (channel style, e.g. spoken replies).
     `first_token_s` overrides the platform first-token deadline for this call (0 = off);
     `hedge_s` overrides the hedged-request delay (0 = off; supersedes first_token_s when on).
+    `history` is the earlier conversation ({'role','content'}, oldest first, already trimmed):
+    it is sent to the model, and a short follow-up is retrieved together with the previous
+    user question so "what about Sundays?" still finds the right chunks.
     """
-    prepared = _prepare(db, bot, question, image_key, image_mime)
+    prepared = _prepare(db, bot, question, image_key, image_mime,
+                        retrieval_query=followup_query(question, history))
     if prepared is None:
         yield from _compose_handoff_stream(db, bot, question, agents_online)
         return
     context, q, candidates, image_data_url = prepared
     yield from llm.answer_stream_with_fallback(
         (bot.system_prompt or "") + system_suffix, context, q, candidates,
-        image_data_url=image_data_url, first_token_s=first_token_s, hedge_s=hedge_s,
+        image_data_url=image_data_url, first_token_s=first_token_s, hedge_s=hedge_s, history=history,
     )

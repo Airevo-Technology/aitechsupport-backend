@@ -107,16 +107,22 @@ def _messages(
     context: str,
     question: str,
     image_data_url: str | None = None,
+    history: list[dict] | None = None,
 ) -> list[dict]:
-    """OpenAI-format messages. With an image the user turn becomes a parts array."""
+    """OpenAI-format messages. With an image the user turn becomes a parts array.
+    `history` (prior {'role','content'} turns, oldest first) sits between the system prompt
+    and the current question so follow-ups keep their context."""
     text = f"CONTEXT:\n{context}\n\nQUESTION: {question}"
+    prior = list(history or [])
     if not image_data_url:
         return [
             {"role": "system", "content": _build_system(system_prompt)},
+            *prior,
             {"role": "user", "content": text},
         ]
     return [
         {"role": "system", "content": _build_system_vision(system_prompt)},
+        *prior,
         {
             "role": "user",
             "content": [
@@ -151,12 +157,13 @@ def answer(
     model: str,
     image_data_url: str | None = None,
     base_url: str | None = None,
+    history: list[dict] | None = None,
 ) -> tuple[str, int]:
     """Generate a grounded answer. Returns (text, total_tokens) for usage metering."""
     resp = _client_for(image_data_url, base_url).chat.completions.create(
         model=model,
         max_tokens=ANSWER_MAX_TOKENS,
-        messages=_messages(system_prompt, context, question, image_data_url),
+        messages=_messages(system_prompt, context, question, image_data_url, history),
     )
     text = (resp.choices[0].message.content or "").strip()
     # `or 0` guards against usage present but total_tokens == None (some providers).
@@ -175,6 +182,7 @@ def answer_stream(
     model: str,
     image_data_url: str | None = None,
     base_url: str | None = None,
+    history: list[dict] | None = None,
 ):
     """Stream a grounded answer. Yields {'type':'delta','text':...} per token chunk,
     then a terminal {'type':'final','text':<full>,'tokens':<total>} for persistence/metering.
@@ -187,7 +195,7 @@ def answer_stream(
         max_tokens=ANSWER_MAX_TOKENS,
         stream=True,
         stream_options={"include_usage": True},
-        messages=_messages(system_prompt, context, question, image_data_url),
+        messages=_messages(system_prompt, context, question, image_data_url, history),
     )
     parts: list[str] = []
     tokens = 0
@@ -460,6 +468,7 @@ def answer_stream_with_fallback(
     image_data_url: str | None = None,
     first_token_s: float | None = None,
     hedge_s: float | None = None,
+    history: list[dict] | None = None,
 ):
     """Streaming twin of answer_with_fallback. Only falls back to the next
     candidate if the CURRENT one fails before yielding any delta content, OR
@@ -475,7 +484,7 @@ def answer_stream_with_fallback(
     if hedge and len(candidates) > 1 and not image_data_url:
         def make_events(i: int):
             m, b = candidates[i]
-            return answer_stream(system_prompt, context, question, model=m, image_data_url=None, base_url=b)
+            return answer_stream(system_prompt, context, question, model=m, image_data_url=None, base_url=b, history=history)
 
         yield from _hedged_stream(candidates, make_events, hedge)
         return
@@ -489,7 +498,7 @@ def answer_stream_with_fallback(
         try:
             events = answer_stream(
                 system_prompt, context, question, model=model,
-                image_data_url=image_data_url, base_url=base_url,
+                image_data_url=image_data_url, base_url=base_url, history=history,
             )
             # The LAST candidate is exempt: a slow answer beats none, and vision turns
             # legitimately need a long cold start.
