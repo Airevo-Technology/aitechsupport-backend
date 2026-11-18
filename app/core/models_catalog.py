@@ -109,7 +109,22 @@ def resolve_candidates(bot: "Bot", package: "Package | None" = None) -> list[tup
             candidates.append((model, _tier_base_url(tier)))
     if not candidates:
         candidates.append((default_model(), None))
-    return candidates
+    return _dedupe(candidates)
+
+
+def _dedupe(candidates: list[tuple[str, str | None]]) -> list[tuple[str, str | None]]:
+    """Drop repeats of the same model on the same endpoint (keep the first). A bot's own
+    chat_model usually equals the package's first tier; retrying that exact model after it
+    stalled or failed only doubles the wait. None means the platform OpenRouter endpoint."""
+    default_base = (config_store.get("OPENROUTER_BASE_URL") or _REAL_OPENROUTER_BASE_URL).rstrip("/")
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str | None]] = []
+    for model, base_url in candidates:
+        key = (model, (base_url or default_base).rstrip("/"))
+        if key not in seen:
+            seen.add(key)
+            out.append((model, base_url))
+    return out
 
 
 # Vision is OFF by default: the self-hosted box can't comfortably host a VLM, so
