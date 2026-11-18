@@ -18,6 +18,7 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import Iterator
@@ -39,10 +40,36 @@ router = APIRouter()
 VOICE_STYLE = (
     "\n\nYou are speaking on a live phone call. Reply in one to three short, natural spoken sentences. "
     "Never use lists, markdown, links or emoji. Say numbers, dates and times the way a person would say them. "
-    "If you need a detail from the caller, ask for one thing at a time."
+    "If you need a detail from the caller, ask for one thing at a time. "
+    "Only state what the context supports. Never claim you said, promised or did something earlier unless it appears "
+    "in this conversation; if you do not have the information, say so briefly and offer to get someone."
 )
 # Spoken when nothing could be generated, so the caller never hears dead air.
 FALLBACK_SPEECH = "Sorry, I'm having a little trouble right now. Let me get someone to help you."
+
+
+# Voice replies must start fast; a stalled model call is abandoned after this long (ms) and the
+# next model in the chain answers. Admin/env VOICE_FIRST_TOKEN_TIMEOUT_MS tunes it; 0 turns it off.
+DEFAULT_VOICE_FIRST_TOKEN_MS = 1000.0
+
+# "Say that again" style requests. Handled without the model: the model only ever sees the last
+# user turn here, so it cannot know what was said before and used to invent it. Replaying the
+# agent's previous reply is exact, instant and free.
+_REPEAT_RES = [re.compile(p) for p in (
+    r"\b(say|repeat)\s+(that|it|this|what you said)\b(?!')",
+    r"\b(say|repeat)\b.*\b(again|once more|one more time)\b",
+    r"\b(didn'?t|did not|couldn'?t|could not|can'?t|cannot) (quite |really )?(catch|hear|get) (that|what you said|you|it)\b",
+    r"^(sorry|pardon|pardon me|come again|excuse me|huh|what|say again|what was that|what did you say|sorry what|sorry\?)$",
+)]
+_NO_HISTORY_REPLY = "I haven't said anything yet. How can I help you today?"
+
+
+def is_repeat_request(utterance: str) -> bool:
+    text = re.sub(r"[^a-z' ]+", " ", utterance.lower()).strip()
+    text = re.sub(r"\s+", " ", text)
+    if not text or len(text.split()) > 9:  # a long utterance is a real question, not "say that again"
+        return False
+    return any(r.search(text) for r in _REPEAT_RES)
 
 
 class _Message(BaseModel):
@@ -75,6 +102,28 @@ def _require_secret(authorization: str | None) -> None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
+def _voice_first_token_s() -> float:
+    raw = (config_store.get("VOICE_FIRST_TOKEN_TIMEOUT_MS") or "").strip()
+    try:
+        ms = float(raw) if raw else DEFAULT_VOICE_FIRST_TOKEN_MS
+    except ValueError:
+        ms = DEFAULT_VOICE_FIRST_TOKEN_MS
+    return max(ms, 0.0) / 1000.0
+
+
+def _repeat_reply(messages: list["_Message"], question: str) -> str | None:
+    """The spoken reply for a "say that again" turn, or None if this is a normal question."""
+    if not is_repeat_request(question):
+        return None
+    prior = next((_text(m.content).strip() for m in reversed(messages) if m.role == "assistant" and _text(m.content).strip()), "")
+    return f"Sure. {prior}" if prior else _NO_HISTORY_REPLY
+
+
+def _canned_events(text: str) -> Iterator[dict]:
+    yield {"type": "delta", "text": text}
+    yield {"type": "final", "text": text, "tokens": 0}
+
+
 def _load_bot(db: Session, bot_id: int) -> Bot | None:
     return db.query(Bot).filter(Bot.id == bot_id).first()
 
@@ -96,7 +145,9 @@ def _reply_events(bot_id: int, question: str) -> Iterator[dict]:
         if bot is None:
             raise LookupError(f"bot {bot_id} not found")
         online = presence.has_available_agent(db, bot.organization_id)
-        for ev in rag.answer_question_stream(db, bot, question, online, system_suffix=VOICE_STYLE):
+        for ev in rag.answer_question_stream(
+            db, bot, question, online, system_suffix=VOICE_STYLE, first_token_s=_voice_first_token_s()
+        ):
             if ev["type"] == "delta":
                 if not spoke:
                     logger.info("voice spike bot=%s first_token_ms=%d", bot_id, (time.monotonic() - t0) * 1000)
@@ -138,10 +189,14 @@ def chat_completions(
     if not question:
         raise HTTPException(status_code=400, detail="No user message")
     cid = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    repeat = _repeat_reply(payload.messages, question)
+
+    def events() -> Iterator[dict]:
+        return _canned_events(repeat) if repeat is not None else _reply_events(bot_id, question)
 
     if not payload.stream:
         text, tokens = "", 0
-        for ev in _reply_events(bot_id, question):
+        for ev in events():
             if ev["type"] == "final":
                 text, tokens = ev["text"], ev.get("tokens", 0)
         return JSONResponse({
@@ -152,7 +207,7 @@ def chat_completions(
 
     def stream() -> Iterator[str]:
         yield _chunk(cid, {"role": "assistant", "content": ""})
-        for ev in _reply_events(bot_id, question):
+        for ev in events():
             if ev["type"] == "delta":
                 yield _chunk(cid, {"content": ev["text"]})
         yield _chunk(cid, {}, finish="stop")

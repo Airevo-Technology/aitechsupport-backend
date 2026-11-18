@@ -31,8 +31,8 @@ def fakes(monkeypatch):
     monkeypatch.setattr(voice.presence, "has_available_agent", lambda db, org: False)
     seen = {}
 
-    def fake_stream(db, b, question, online, system_suffix=""):
-        seen.update(question=question, suffix=system_suffix)
+    def fake_stream(db, b, question, online, system_suffix="", first_token_s=None):
+        seen.update(question=question, suffix=system_suffix, first_token_s=first_token_s)
         yield {"type": "delta", "text": "We open at "}
         yield {"type": "delta", "text": "nine."}
         yield {"type": "final", "text": "We open at nine.", "tokens": 42}
@@ -111,3 +111,68 @@ def test_failure_before_any_speech_becomes_spoken_apology(client, monkeypatch):
     r = client.post(URL, json=BODY, headers=AUTH)
     text = "".join(json.loads(d)["choices"][0]["delta"].get("content", "") for d in _sse_data(r.text)[:-1])
     assert text == voice.FALLBACK_SPEECH
+
+
+# ---- repeat requests are answered without the model -------------------------------------
+
+@pytest.mark.parametrize("utterance", [
+    "Sorry, can you say that again?", "Can you repeat that please", "Say that again", "Pardon?", "Sorry?",
+    "I didn't catch that", "Could you say it one more time", "come again", "What did you say?",
+])
+def test_repeat_requests_detected(utterance):
+    assert voice.is_repeat_request(utterance)
+
+
+@pytest.mark.parametrize("utterance", [
+    "Sorry, I need to change my booking", "What are your opening hours?", "Can you say whether it's open on Sunday?",
+    "I want to repeat my order from last week and add a coffee", "Can I speak to someone about my order?", "",
+])
+def test_normal_questions_not_treated_as_repeat(utterance):
+    assert not voice.is_repeat_request(utterance)
+
+
+def _body(*msgs, stream=False):
+    return {"stream": stream, "messages": [{"role": r, "content": c} for r, c in msgs]}
+
+
+def test_repeat_replays_previous_reply_without_calling_the_model(client, fakes):
+    r = client.post(URL, headers=AUTH, json=_body(
+        ("user", "What are your opening hours?"), ("assistant", "We open at nine."), ("user", "Sorry, can you say that again?")))
+    assert r.status_code == 200
+    assert r.json()["choices"][0]["message"]["content"] == "Sure. We open at nine."
+    assert r.json()["usage"]["total_tokens"] == 0
+    assert "question" not in fakes  # the RAG/LLM path never ran
+
+
+def test_repeat_with_no_history_does_not_invent_anything(client, fakes):
+    r = client.post(URL, headers=AUTH, json=_body(("user", "Sorry, can you say that again?")))
+    assert r.json()["choices"][0]["message"]["content"] == voice._NO_HISTORY_REPLY
+    assert "question" not in fakes
+
+
+def test_repeat_streams_too(client):
+    r = client.post(URL, headers=AUTH, json=_body(("assistant", "We open at nine."), ("user", "say that again"), stream=True))
+    chunks = [json.loads(d) for d in _sse_data(r.text) if d != "[DONE]"]
+    assert "".join(c["choices"][0]["delta"].get("content", "") for c in chunks) == "Sure. We open at nine."
+
+
+def test_sorry_prefix_on_a_real_question_still_goes_to_the_model(client, fakes):
+    client.post(URL, headers=AUTH, json=_body(("user", "Sorry, I need to change my booking")))
+    assert fakes["question"] == "Sorry, I need to change my booking"
+
+
+# ---- voice-only first-token budget & prompt guard ----------------------------------------
+
+def test_voice_budget_defaults_to_one_second_and_is_passed_to_rag(client, fakes):
+    client.post(URL, headers=AUTH, json=BODY)
+    assert fakes["first_token_s"] == 1.0
+
+
+@pytest.mark.parametrize("raw,want", [("", 1.0), ("1500", 1.5), ("0", 0.0), ("abc", 1.0), ("-5", 0.0)])
+def test_voice_budget_setting(monkeypatch, raw, want):
+    monkeypatch.setattr(voice.config_store, "get", lambda k, d="": raw if k == "VOICE_FIRST_TOKEN_TIMEOUT_MS" else d)
+    assert voice._voice_first_token_s() == want
+
+
+def test_voice_style_forbids_inventing_earlier_speech():
+    assert "Never claim you said" in voice.VOICE_STYLE

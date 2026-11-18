@@ -324,6 +324,7 @@ def answer_stream_with_fallback(
     question: str,
     candidates: list[tuple[str, str | None]],
     image_data_url: str | None = None,
+    first_token_s: float | None = None,
 ):
     """Streaming twin of answer_with_fallback. Only falls back to the next
     candidate if the CURRENT one fails before yielding any delta content, OR
@@ -334,7 +335,8 @@ def answer_stream_with_fallback(
     than silently restarted on a different model.
     """
     errors: list[tuple[str, Exception]] = []
-    budget = first_token_budget()
+    # A caller-supplied budget (e.g. voice) overrides the platform setting; 0 turns it off.
+    budget = first_token_s if first_token_s is not None else first_token_budget()
     for idx, (model, base_url) in enumerate(candidates):
         content_seen = False
         t0 = time.monotonic()
