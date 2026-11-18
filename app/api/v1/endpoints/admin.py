@@ -142,10 +142,10 @@ def update_settings(
             updates[key] = value.strip()
     if payload.embeddings_provider is not None:
         provider = payload.embeddings_provider.strip().lower()
-        if provider not in ("voyage", "openrouter", "huggingface"):
+        if provider not in ("voyage", "openrouter", "huggingface", "ollama"):
             raise HTTPException(
                 status_code=422,
-                detail="embeddings_provider must be 'voyage', 'openrouter', or 'huggingface'",
+                detail="embeddings_provider must be 'voyage', 'openrouter', 'huggingface', or 'ollama'",
             )
         updates["EMBEDDINGS_PROVIDER"] = provider
     if payload.whatsapp_default_provider is not None:
