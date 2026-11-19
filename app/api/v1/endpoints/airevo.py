@@ -1,4 +1,4 @@
-"""airevo.com.au marketplace endpoints: signed events in, single sign-on.
+"""Airevo marketplace endpoints: signed events in, single sign-on.
 
 Both are public (no JWT): events are authenticated by Airevo's HMAC signature,
 and SSO by a one-time token that only Airevo's API can confirm. All the rules
@@ -28,7 +28,7 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
 @router.post("/events")
 async def events(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     if not airevo.enabled():
-        return _error(404, "not_enabled", "The airevo.com.au marketplace is not enabled here.")
+        return _error(404, "not_enabled", "The Airevo marketplace is not enabled here.")
 
     raw = await request.body()
     path = request.url.path + (f"?{request.url.query}" if request.url.query else "")

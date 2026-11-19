@@ -83,13 +83,13 @@ def tokens_remaining(db: Session, sub: Subscription) -> int:
 def has_quota(db: Session, sub: Subscription) -> bool:
     """True if the org can still spend tokens (quota 0 is treated as 'no allowance').
 
-    A subscription that isn't active (airevo.com.au suspended it after a failed
+    A subscription that isn't active (the Airevo marketplace suspended it after a failed
     renewal) has no allowance either: the bots stop answering, the data stays."""
     return sub.status == "active" and tokens_remaining(db, sub) > 0
 
 
 def is_airevo_billed(sub: Subscription | None) -> bool:
-    """Plan is sold and renewed by airevo.com.au, not by this deployment."""
+    """Plan is sold and renewed by the Airevo marketplace, not by this deployment."""
     return sub is not None and sub.billing_source == "airevo"
 
 

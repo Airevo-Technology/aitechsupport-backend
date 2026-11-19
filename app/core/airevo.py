@@ -1,6 +1,8 @@
-"""airevo.com.au marketplace integration (provider side).
+"""Airevo marketplace integration (provider side).
 
-Airevo is the legal supplier to Australian customers: it takes the payment,
+Airevo runs a regional marketplace per country (airevo.com.au for Australia,
+airevo.my for Malaysia), set by AIREVO_API_BASE. It is the legal supplier to
+the customers there: it takes the payment,
 issues the tax invoice and tells us, through signed events, when a paid plan
 starts, changes, pauses or ends. This module verifies those events, applies them
 to the organization's Subscription, and calls back to Airevo's provider API
@@ -108,6 +110,11 @@ def site_base() -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def site_name() -> str:
+    """The marketplace as customers know it ("airevo.my"), for messages."""
+    return urlparse(api_base()).netloc.removeprefix("www.") or "Airevo"
+
+
 def manage_url(sub: Subscription) -> str | None:
     """The customer's own subscription page on Airevo (change plan, card, cancel)."""
     return f"{site_base()}/portal/subscriptions/{sub.airevo_subscription_id}" if sub.airevo_subscription_id else None
@@ -118,7 +125,7 @@ def is_configured() -> bool:
 
 
 def sells_paid_plans() -> bool:
-    """True when paid plans on this deployment are bought on airevo.com.au only."""
+    """True when paid plans on this deployment are bought on the Airevo marketplace only."""
     return enabled() and bool(listing_url())
 
 
@@ -274,7 +281,7 @@ def _provision(db: Session, event: dict) -> dict:
             org_id = user.organization_id
             sub = billing.get_or_create_subscription(db, org_id)
             if sub.billing_source == "airevo" and sub.airevo_subscription_id not in (None, airevo_id):
-                raise AirevoError(422, "already_subscribed", "This account already has an active airevo.com.au subscription.")
+                raise AirevoError(422, "already_subscribed", f"This account already has an active {site_name()} subscription.")
         else:
             org_id = _create_account(db, email, customer)
             sub = billing.get_or_create_subscription(db, org_id)

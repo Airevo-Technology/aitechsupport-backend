@@ -43,12 +43,12 @@ def list_packages(db: Session = Depends(get_db), user: User = Depends(get_curren
 
 
 def _guard_direct_billing(sub, pkg: Package) -> None:
-    """airevo.com.au owns the plan for airevo-billed subscriptions, and sells every
+    """The Airevo marketplace owns the plan for airevo-billed subscriptions, and sells every
     paid plan when the marketplace is switched on for this deployment."""
     if billing.is_airevo_billed(sub):
-        raise HTTPException(status_code=409, detail="Your plan is managed on airevo.com.au. Change or cancel it there.")
+        raise HTTPException(status_code=409, detail=f"Your plan is managed on {airevo.site_name()}. Change or cancel it there.")
     if pkg.price_myr > 0 and airevo.sells_paid_plans():
-        raise HTTPException(status_code=409, detail="Paid plans are sold through airevo.com.au.")
+        raise HTTPException(status_code=409, detail=f"Paid plans are sold through {airevo.site_name()}.")
 
 
 def _subscription_out(db: Session, sub) -> SubscriptionOut:

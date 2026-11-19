@@ -53,7 +53,7 @@ class SubscriptionOut(BaseModel):
     # 0-100: % off every paid checkout/renewal from active paid referrals.
     referral_discount_percent: int = 0
     # "direct" | "airevo". For airevo, the plan is changed or cancelled on
-    # airevo.com.au (manage_url) and renews on period_end.
+    # the Airevo marketplace (manage_url) and renews on period_end.
     billing_source: str = "direct"
     period_end: str | None = None
     manage_url: str | None = None
@@ -97,7 +97,7 @@ class GatewaysOut(BaseModel):
     bank_transfer: bool
     # Gateway used when none is chosen explicitly: billplz | paypal | null.
     primary: str | None = None
-    # Set when paid plans are bought on airevo.com.au instead of a gateway here.
+    # Set when paid plans are bought on the Airevo marketplace instead of a gateway here.
     marketplace_url: str | None = None
 
 
@@ -257,7 +257,7 @@ class BillplzSettingsUpdate(BaseModel):
 
 
 class AirevoSettingsOut(BaseModel):
-    """airevo.com.au marketplace connection. The secret is never returned in full."""
+    """Airevo marketplace connection. The secret is never returned in full."""
     enabled: bool
     configured: bool        # enabled + key id + secret
     sells_paid_plans: bool  # configured listing URL: paid self-checkout is closed

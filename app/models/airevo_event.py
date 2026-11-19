@@ -6,7 +6,7 @@ from app.db.session import Base
 
 
 class AirevoEvent(Base):
-    """An airevo.com.au marketplace event we have processed (dedupe on its id)."""
+    """An Airevo marketplace event we have processed (dedupe on its id)."""
 
     __tablename__ = "airevo_events"
 
