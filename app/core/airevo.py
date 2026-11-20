@@ -250,6 +250,7 @@ def _apply_plan(db: Session, sub: Subscription, pkg: Package) -> None:
         sub.plan = pkg.slug
         sub.tokens_used = 0
         sub.messages_used = 0
+        sub.voice_seconds_used = 0
         sub.period_start = datetime.utcnow()
 
 

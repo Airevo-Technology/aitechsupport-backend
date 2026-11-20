@@ -107,6 +107,16 @@ MANAGED_KEYS = {
     "AIREVO_LISTING_URL": "AIREVO_LISTING_URL",      # product page customers buy from
     # Field-level encryption key for Channel.access_token — see app/core/crypto.py.
     "FIELD_ENCRYPTION_KEY": "FIELD_ENCRYPTION_KEY",
+    # AI phone lines (app/core/voice_lines.py): Telnyx numbers answered by ElevenLabs
+    # agents. Off unless VOICE_ENABLED; meant for the AU deployment only.
+    "VOICE_ENABLED": "VOICE_ENABLED",                      # "true" | "false"
+    "TELNYX_API_KEY": "TELNYX_API_KEY",
+    "TELNYX_SIP_CONNECTION_ID": "TELNYX_SIP_CONNECTION_ID",  # FQDN connection that routes to ElevenLabs
+    "ELEVENLABS_API_KEY": "ELEVENLABS_API_KEY",
+    "ELEVENLABS_WEBHOOK_SECRET": "ELEVENLABS_WEBHOOK_SECRET",  # HMAC secret of the post-call webhook
+    "ELEVENLABS_WEBHOOK_ID": "ELEVENLABS_WEBHOOK_ID",          # attached to every agent we create
+    "VOICE_CATALOG": "VOICE_CATALOG",                      # JSON [{voice_id, name, description, preview_url}]
+    "VOICE_TTS_MODEL": "VOICE_TTS_MODEL",                  # ElevenLabs tts.model_id (default eleven_v4_turbo)
 }
 
 # Keys whose value must never be returned to the client in full.
@@ -129,6 +139,9 @@ SECRET_KEYS = {
     "FIELD_ENCRYPTION_KEY",
     "AIREVO_SECRET",
     "AIREVO_SECRET_PREVIOUS",
+    "TELNYX_API_KEY",
+    "ELEVENLABS_API_KEY",
+    "ELEVENLABS_WEBHOOK_SECRET",
 }
 
 

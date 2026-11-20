@@ -5,13 +5,14 @@ turn-taking and text-to-speech, and calls this endpoint for the reply text. We a
 with the same RAG + model-fallback path the website widget uses, so the answer comes
 only from the bot's own knowledge base.
 
-This is a spike, deliberately small and off by default:
-- Dormant (404) until the platform-admin/env setting VOICE_SPIKE_SECRET is set.
-- Auth is one shared bearer secret; the bot is chosen in the URL. Production (phase V1)
-  replaces this with a per-voice-line secret and org-scoped lookup.
-- No billing/quota metering yet; token counts are only logged.
-Point the voice agent's custom-LLM server URL at
-`{API_BASE_URL}/api/v1/voice/spike/{bot_id}` and put the secret in its API-key field.
+Two entry points share the answering code:
+- `/voice/lines/{line_id}/chat/completions`: production. One per AI phone line
+  (app/core/voice_lines.py), authenticated by that line's own secret, and only
+  answered while the line is active and the plan has minutes left.
+- `/voice/spike/{bot_id}/chat/completions`: the original test endpoint, dormant (404)
+  until VOICE_SPIKE_SECRET is set; one shared secret, the bot chosen in the URL.
+`/voice/webhooks/elevenlabs` receives ElevenLabs' signed post-call webhook, which logs
+the call in the inbox and counts its minutes.
 """
 from __future__ import annotations
 
@@ -23,15 +24,17 @@ import time
 import uuid
 from collections.abc import Iterator
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core import config_store, limits, llm, presence, rag
+from app.core import config_store, elevenlabs, limits, llm, presence, rag, voice_lines
 from app.core.settings import settings
 from app.db.session import SessionLocal, get_db
 from app.models.bot import Bot
+from app.models.voice_line import VoiceLine
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -46,6 +49,22 @@ VOICE_STYLE = (
 )
 # Spoken when nothing could be generated, so the caller never hears dead air.
 FALLBACK_SPEECH = "Sorry, I'm having a little trouble right now. Let me get someone to help you."
+# Spoken when the line isn't in service (plan without voice, minutes used up, line paused).
+UNAVAILABLE_SPEECH = "Sorry, this phone line isn't available right now. Please contact the business another way. Goodbye."
+# Said just before handing the call to a person (transfer_to_number tool).
+TRANSFER_SPEECH = "Sure, I'll put you through to someone now."
+TRANSFER_TOOL = "transfer_to_number"
+
+# "Can I speak to a person" style requests, answered with a transfer when the agent offers one.
+_HANDOFF_RE = re.compile(
+    r"\b(speak|talk|chat)\s+(to|with)\s+(a\s+|an\s+|the\s+|your\s+)?(real\s+|actual\s+)?"
+    r"(human|person|someone|somebody|staff|manager|operator|agent|representative|owner)\b"
+    r"|\btransfer\s+me\b|\b(a|an)\s+(real|actual)\s+(person|human)\b|\bput\s+me\s+through\b"
+)
+
+
+def is_handoff_request(utterance: str) -> bool:
+    return bool(_HANDOFF_RE.search((utterance or "").lower()))
 
 
 # Voice replies must start fast; a stalled model call is abandoned after this long (ms) and the
@@ -85,6 +104,8 @@ class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     messages: list[_Message]
     stream: bool = False
+    # OpenAI-style tools the voice platform offers (e.g. transfer_to_number).
+    tools: list | None = None
 
 
 def _text(content: str | list | None) -> str:
@@ -204,6 +225,87 @@ def _chunk(cid: str, delta: dict, finish: str | None = None) -> str:
     return f"data: {json.dumps(body, ensure_ascii=False)}\n\n"
 
 
+def _offered_tool(tools: list | None, name: str) -> dict | None:
+    for t in tools or []:
+        fn = t.get("function") if isinstance(t, dict) else None
+        if isinstance(fn, dict) and fn.get("name") == name:
+            return fn
+    return None
+
+
+def _transfer_arguments(tool: dict, transfer_number: str | None) -> str:
+    """Fill the tool's declared parameters: enums take their first value, number-like
+    fields the line's transfer number, anything else a short reason."""
+    props = ((tool.get("parameters") or {}).get("properties") or {}) if isinstance(tool.get("parameters"), dict) else {}
+    args: dict = {}
+    for key, spec in props.items():
+        spec = spec if isinstance(spec, dict) else {}
+        if spec.get("enum"):
+            args[key] = spec["enum"][0]
+        elif any(w in key.lower() for w in ("number", "phone", "destination")) and transfer_number:
+            args[key] = transfer_number
+        elif spec.get("type") in (None, "string"):
+            args[key] = "The caller asked to speak to a person."
+    return json.dumps(args)
+
+
+def _respond(bot_id: int, payload: ChatCompletionRequest, *, transfer_number: str | None = None,
+             canned: str | None = None):
+    """Answer one turn as an OpenAI chat completion (streamed or not)."""
+    question = next((_text(m.content).strip() for m in reversed(payload.messages) if m.role == "user"), "")
+    if not question:
+        raise HTTPException(status_code=400, detail="No user message")
+    cid = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    transfer_tool = _offered_tool(payload.tools, TRANSFER_TOOL)
+    tool_call = None
+    if canned is not None:
+        reply = canned
+    elif transfer_tool and is_handoff_request(question):
+        reply = TRANSFER_SPEECH
+        tool_call = {"id": f"call_{uuid.uuid4().hex[:16]}", "type": "function",
+                     "function": {"name": TRANSFER_TOOL, "arguments": _transfer_arguments(transfer_tool, transfer_number)}}
+    else:
+        reply = _repeat_reply(payload.messages, question)
+    history = _history(payload.messages)
+
+    def events() -> Iterator[dict]:
+        return _canned_events(reply) if reply is not None else _reply_events(bot_id, question, history)
+
+    finish = "tool_calls" if tool_call else "stop"
+    if not payload.stream:
+        text, tokens = "", 0
+        for ev in events():
+            if ev["type"] == "final":
+                text, tokens = ev["text"], ev.get("tokens", 0)
+        message: dict = {"role": "assistant", "content": text}
+        if tool_call:
+            message["tool_calls"] = [tool_call]
+        return JSONResponse({
+            "id": cid, "object": "chat.completion", "created": int(time.time()), "model": "aichatsupport-rag",
+            "choices": [{"index": 0, "message": message, "finish_reason": finish}],
+            "usage": {"total_tokens": tokens},
+        })
+
+    def stream() -> Iterator[str]:
+        yield _chunk(cid, {"role": "assistant", "content": ""})
+        for ev in events():
+            if ev["type"] == "delta":
+                yield _chunk(cid, {"content": ev["text"]})
+        if tool_call:
+            yield _chunk(cid, {"tool_calls": [{"index": 0, **tool_call}]})
+        yield _chunk(cid, {}, finish=finish)
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.get("/available")
+def voice_available() -> dict:
+    """Whether this site offers AI phone lines (shows or hides the dashboard's Phone tab)."""
+    return {"enabled": voice_lines.enabled()}
+
+
 @router.post("/spike/{bot_id}/chat/completions")
 def chat_completions(
     bot_id: int,
@@ -214,34 +316,45 @@ def chat_completions(
     _require_secret(authorization)
     if _load_bot(db, bot_id) is None:
         raise HTTPException(status_code=404, detail="Bot not found")
-    question = next((_text(m.content).strip() for m in reversed(payload.messages) if m.role == "user"), "")
-    if not question:
-        raise HTTPException(status_code=400, detail="No user message")
-    cid = f"chatcmpl-{uuid.uuid4().hex[:24]}"
-    repeat = _repeat_reply(payload.messages, question)
-    history = _history(payload.messages)
+    return _respond(bot_id, payload)
 
-    def events() -> Iterator[dict]:
-        return _canned_events(repeat) if repeat is not None else _reply_events(bot_id, question, history)
 
-    if not payload.stream:
-        text, tokens = "", 0
-        for ev in events():
-            if ev["type"] == "final":
-                text, tokens = ev["text"], ev.get("tokens", 0)
-        return JSONResponse({
-            "id": cid, "object": "chat.completion", "created": int(time.time()), "model": "aichatsupport-rag",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
-            "usage": {"total_tokens": tokens},
-        })
+@router.post("/lines/{line_id}/chat/completions")
+def line_chat_completions(
+    line_id: int,
+    payload: ChatCompletionRequest,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Production custom-LLM endpoint for one AI phone line."""
+    line = db.query(VoiceLine).filter(VoiceLine.id == line_id).first()
+    supplied = (authorization or "").removeprefix("Bearer ").strip()
+    if line is None or not line.llm_secret_hash or not supplied or not hmac.compare_digest(
+        voice_lines.hash_secret(supplied), line.llm_secret_hash
+    ):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    canned = None if voice_lines.can_take_calls(db, line) else UNAVAILABLE_SPEECH
+    return _respond(line.bot_id, payload, transfer_number=line.transfer_number, canned=canned)
 
-    def stream() -> Iterator[str]:
-        yield _chunk(cid, {"role": "assistant", "content": ""})
-        for ev in events():
-            if ev["type"] == "delta":
-                yield _chunk(cid, {"content": ev["text"]})
-        yield _chunk(cid, {}, finish="stop")
-        yield "data: [DONE]\n\n"
 
-    return StreamingResponse(stream(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+@router.post("/webhooks/elevenlabs")
+async def elevenlabs_webhook(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Signed post-call webhook: log the call in the inbox and count its minutes."""
+    raw = await request.body()
+    secret = config_store.get("ELEVENLABS_WEBHOOK_SECRET").strip()
+    if not elevenlabs.verify_webhook(raw, request.headers.get("elevenlabs-signature", ""), secret):
+        logger.warning("voice webhook: bad or missing signature")
+        return JSONResponse(status_code=401, content={"detail": "Invalid signature"})
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"detail": "Body is not JSON"})
+    if event.get("type") == "post_call_transcription" and isinstance(event.get("data"), dict):
+        try:
+            call = voice_lines.record_call(db, event["data"])
+        except IntegrityError:  # a concurrent redelivery stored it first
+            db.rollback()
+            call = None
+        if call is not None:
+            logger.info("voice call logged id=%s line=%s secs=%s", call.id, call.voice_line_id, call.duration_secs)
+    return JSONResponse({"ok": True})

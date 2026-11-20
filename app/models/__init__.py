@@ -17,3 +17,4 @@ from app.models.setting import Setting  # noqa: F401
 from app.models.email_template import EmailTemplate  # noqa: F401
 from app.models.page import Page  # noqa: F401
 from app.models.airevo_event import AirevoEvent  # noqa: F401
+from app.models.voice_line import VoiceCall, VoiceLine  # noqa: F401

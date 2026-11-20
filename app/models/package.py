@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, false
 
 from app.db.session import Base
 
@@ -25,6 +25,11 @@ class Package(Base):
     # Whether a bot on this package can connect WhatsApp (Fonnte) at all —
     # gates the /whatsapp/connect flow, not just the model used to answer.
     whatsapp_enabled = Column(Boolean, default=True, nullable=False)
+
+    # AI phone line (app/core/voice_lines.py): whether a bot on this package can
+    # have one, and the call minutes included each month (0 = none).
+    voice_enabled = Column(Boolean, default=False, server_default=false(), nullable=False)
+    monthly_voice_minutes = Column(Integer, default=0, server_default="0", nullable=False)
 
     # Ordered chat fallback chain for bots on this package: a list of
     # {label, provider, base_url, model} tried top to bottom until one answers

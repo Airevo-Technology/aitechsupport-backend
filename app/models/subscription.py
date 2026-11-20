@@ -23,6 +23,9 @@ class Subscription(Base):
     # Usage metering for plan limits (reset each billing cycle).
     messages_used = Column(Integer, default=0)
     tokens_used = Column(Integer, default=0, nullable=False)
+    # Phone-call seconds this period (ElevenLabs post-call webhook), against
+    # the package's monthly_voice_minutes.
+    voice_seconds_used = Column(Integer, default=0, server_default="0", nullable=False)
     period_start = Column(DateTime, default=datetime.utcnow)
 
     # Admin-set monthly renewal cycle (mainly for bank-transfer clients, who

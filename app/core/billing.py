@@ -61,7 +61,7 @@ def get_or_create_subscription(db: Session, organization_id: int) -> Subscriptio
     # concurrent usage write).
     if sub.period_start and datetime.utcnow() - sub.period_start >= timedelta(days=PERIOD_DAYS):
         db.query(Subscription).filter(Subscription.organization_id == organization_id).update(
-            {Subscription.tokens_used: 0, Subscription.messages_used: 0, Subscription.period_start: datetime.utcnow()},
+            {Subscription.tokens_used: 0, Subscription.messages_used: 0, Subscription.voice_seconds_used: 0, Subscription.period_start: datetime.utcnow()},
             synchronize_session=False,
         )
         db.commit()
@@ -116,6 +116,7 @@ def subscribe(db: Session, organization_id: int, package: Package) -> Subscripti
     if changed:
         sub.tokens_used = 0
         sub.messages_used = 0
+        sub.voice_seconds_used = 0
         sub.period_start = datetime.utcnow()
     db.commit()
     db.refresh(sub)

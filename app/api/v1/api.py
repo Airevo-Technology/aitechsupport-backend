@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import health, auth, bots, knowledge, admin, billing, whatsapp, public, content, agent, team, airevo, voice
+from app.api.v1.endpoints import health, auth, bots, knowledge, admin, billing, whatsapp, public, content, agent, team, airevo, voice, voice_lines
 
 api_router = APIRouter()
 
@@ -27,3 +27,6 @@ api_router.include_router(content.router, prefix="/content", tags=["content"])
 api_router.include_router(airevo.router, prefix="/airevo", tags=["airevo"])
 # Voice (V0 spike): OpenAI-compatible custom-LLM endpoint for a managed voice agent; dormant until VOICE_SPIKE_SECRET is set
 api_router.include_router(voice.router, prefix="/voice", tags=["voice"])
+# AI phone lines: the subscriber's Phone page (/bots/{id}/voice...) and the platform admin's Voice pages
+api_router.include_router(voice_lines.router, tags=["voice"])
+api_router.include_router(voice_lines.admin_router, prefix="/admin/voice", tags=["admin"])

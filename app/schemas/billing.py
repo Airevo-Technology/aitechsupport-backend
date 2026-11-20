@@ -17,6 +17,9 @@ class PackageOut(BaseModel):
     sort_order: int
     # Whether a bot on this plan can connect WhatsApp (Fonnte) at all.
     whatsapp_enabled: bool = True
+    # AI phone line on this plan, and the call minutes included each month.
+    voice_enabled: bool = False
+    monthly_voice_minutes: int = 0
     # Ordered chat fallback chain for this plan; null -> inherit the
     # platform-wide chain (see models_catalog.chain_for_package).
     fallback_chain: list[FallbackTier] | None = None
@@ -37,6 +40,8 @@ class PackageUpsert(BaseModel):
     is_active: bool = True
     sort_order: int = 0
     whatsapp_enabled: bool = True
+    voice_enabled: bool = False
+    monthly_voice_minutes: int = Field(default=0, ge=0)
     fallback_chain: list[FallbackTier] | None = None
 
 
