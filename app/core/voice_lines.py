@@ -279,9 +279,66 @@ def order_number(db: Session, line: VoiceLine, phone_number: str) -> VoiceLine:
     return line
 
 
+def adopt_number(db: Session, line: VoiceLine, phone_number: str) -> VoiceLine:
+    """Use a number already on the platform's Telnyx account (bought in the portal) instead of ordering one."""
+    if line.status not in ("submitted", "info_needed", "failed"):
+        raise VoiceLineError(f"A line that is '{line.status}' can't take a number.", 409)
+    number = normalize_au_phone(phone_number)
+    if not number:
+        raise VoiceLineError("Enter the number in full, e.g. +61 2 8390 2245.", 422)
+    if db.query(VoiceLine).filter(VoiceLine.phone_number == number, VoiceLine.id != line.id,
+                                  VoiceLine.status != "released").first():
+        raise VoiceLineError("That number already belongs to another line.", 409)
+    connection = telnyx.sip_connection_id()
+    try:
+        record = telnyx.find_phone_number(number)
+        if record is None:
+            raise VoiceLineError("That number isn't on the Telnyx account.", 404)
+        line.telnyx_phone_number_id = str(record.get("id"))
+        if connection and str(record.get("connection_id") or "") != connection:
+            telnyx.assign_connection(line.telnyx_phone_number_id, connection)
+    except telnyx.TelnyxError as exc:
+        raise VoiceLineError(exc.message, 502)
+    line.phone_number = number
+    line.telnyx_number_order_id = None
+    _apply_number_status(line, record.get("status"))
+    db.commit()
+    db.refresh(line)
+    return line
+
+
+def _apply_number_status(line: VoiceLine, status: str | None) -> None:
+    """Map a Telnyx phone-number status onto the line (adopted numbers have no order to follow)."""
+    line.telnyx_status = status
+    if status == "active":
+        line.status = "number_ready"
+        line.status_message = None
+    elif status in ("requirement-info-pending", "requirement-info-exception"):
+        line.status = "info_needed"
+        line.status_message = line.status_message or "The carrier needs more information about your business or address."
+    elif status in ("purchase-failed", "deleted"):
+        line.status = "failed"
+        line.status_message = f"The number is {status} at Telnyx."
+    else:
+        line.status = "ordered"
+
+
 def sync(db: Session, line: VoiceLine) -> VoiceLine:
-    """Refresh an ordered line from Telnyx."""
-    if not line.telnyx_number_order_id or line.status not in ("ordered", "info_needed"):
+    """Refresh an ordered (or adopted) line from Telnyx."""
+    if line.status not in ("ordered", "info_needed"):
+        return line
+    if not line.telnyx_number_order_id:
+        if not line.phone_number:
+            return line
+        try:
+            record = telnyx.find_phone_number(line.phone_number)
+        except telnyx.TelnyxError as exc:
+            raise VoiceLineError(exc.message, 502)
+        if record is not None:
+            _apply_number_status(line, record.get("status"))
+            line.telnyx_phone_number_id = str(record.get("id"))
+        db.commit()
+        db.refresh(line)
         return line
     try:
         order = telnyx.get_number_order(line.telnyx_number_order_id)
@@ -397,9 +454,16 @@ def activate(db: Session, line: VoiceLine) -> VoiceLine:
         else:
             elevenlabs.update_agent(line.el_agent_id, agent_body(line, bot, line.el_secret_id))
         if not line.el_phone_number_id:
-            line.el_phone_number_id = elevenlabs.import_sip_number(
-                f"{line.business_name or 'line'} ({line.id})"[:50], line.phone_number or "", line.el_agent_id)
-            db.commit()
+            # A number imported by hand earlier is reused rather than imported twice.
+            existing = elevenlabs.find_phone_number(line.phone_number or "")
+            if existing:
+                line.el_phone_number_id = existing
+                db.commit()
+                elevenlabs.assign_agent(existing, line.el_agent_id)
+            else:
+                line.el_phone_number_id = elevenlabs.import_sip_number(
+                    f"{line.business_name or 'line'} ({line.id})"[:50], line.phone_number or "", line.el_agent_id)
+                db.commit()
         else:
             elevenlabs.assign_agent(line.el_phone_number_id, line.el_agent_id)
     except elevenlabs.ElevenLabsError as exc:

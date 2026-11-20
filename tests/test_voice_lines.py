@@ -191,6 +191,7 @@ def test_activate_creates_secret_agent_and_number_then_is_idempotent(db, setting
     monkeypatch.setattr(elevenlabs, "create_secret", lambda name, value: created.setdefault("secret", value) and "sec-1")
     monkeypatch.setattr(elevenlabs, "create_agent", lambda body: created.setdefault("agent", body) and "agent-1")
     monkeypatch.setattr(elevenlabs, "import_sip_number", lambda label, number, agent: created.setdefault("number", (number, agent)) and "pn-1")
+    monkeypatch.setattr(elevenlabs, "find_phone_number", lambda n: None)
     updates = []
     monkeypatch.setattr(elevenlabs, "update_agent", lambda aid, body: updates.append(aid))
     monkeypatch.setattr(elevenlabs, "assign_agent", lambda pid, aid: updates.append(pid))
@@ -368,3 +369,45 @@ def test_available_flag_follows_the_site_setting(client, settings_store):
     assert client.get("/api/v1/voice/available").json() == {"enabled": True}
     settings_store["VOICE_ENABLED"] = "false"
     assert client.get("/api/v1/voice/available").json() == {"enabled": False}
+
+
+# ---- adopting a number bought in the Telnyx portal ----------------------------------
+
+def test_adopt_existing_number_routes_it_and_follows_its_status(db, settings_store, monkeypatch):
+    line = _line(db, status="submitted")
+    assigned = []
+    monkeypatch.setattr(telnyx, "find_phone_number", lambda n: {"id": 42, "status": "requirement-info-under-review", "connection_id": None})
+    monkeypatch.setattr(telnyx, "assign_connection", lambda pid, conn: assigned.append((pid, conn)))
+    voice_lines.adopt_number(db, line, "+61 2 8390 2245")
+    assert (line.phone_number, line.telnyx_phone_number_id, line.status) == ("+61283902245", "42", "ordered")
+    assert assigned == [("42", "conn-1")]
+
+    monkeypatch.setattr(telnyx, "find_phone_number", lambda n: {"id": 42, "status": "active", "connection_id": "conn-1"})
+    voice_lines.sync(db, line)
+    assert line.status == "number_ready"
+
+
+def test_adopt_refuses_unknown_or_taken_numbers(db, settings_store, monkeypatch):
+    _line(db, status="active", phone_number="+61283902245")
+    db.add(Bot(id=8, organization_id=1, name="Other"))
+    db.commit()
+    line = VoiceLine(organization_id=1, bot_id=8, status="submitted")
+    db.add(line)
+    db.commit()
+    with pytest.raises(voice_lines.VoiceLineError, match="another line"):
+        voice_lines.adopt_number(db, line, "+61283902245")
+    monkeypatch.setattr(telnyx, "find_phone_number", lambda n: None)
+    with pytest.raises(voice_lines.VoiceLineError, match="isn't on the Telnyx account"):
+        voice_lines.adopt_number(db, line, "+61299999999")
+
+
+def test_activate_reuses_a_number_already_imported_into_elevenlabs(db, settings_store, monkeypatch):
+    line = _line(db, status="number_ready", phone_number="+61283902245")
+    monkeypatch.setattr(elevenlabs, "create_secret", lambda name, value: "sec-1")
+    monkeypatch.setattr(elevenlabs, "create_agent", lambda body: "agent-1")
+    monkeypatch.setattr(elevenlabs, "find_phone_number", lambda n: "phnum_manual")
+    monkeypatch.setattr(elevenlabs, "import_sip_number", lambda *a: pytest.fail("must not import twice"))
+    assigned = []
+    monkeypatch.setattr(elevenlabs, "assign_agent", lambda pid, aid: assigned.append((pid, aid)))
+    voice_lines.activate(db, line)
+    assert line.el_phone_number_id == "phnum_manual" and assigned == [("phnum_manual", "agent-1")]

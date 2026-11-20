@@ -274,6 +274,12 @@ def order(line_id: int, payload: OrderRequest, db: Session = Depends(get_db), ad
     return _act(db, line_id, voice_lines.order_number, payload.phone_number.strip())
 
 
+@admin_router.post("/lines/{line_id}/adopt", response_model=AdminVoiceLineRow)
+def adopt(line_id: int, payload: OrderRequest, db: Session = Depends(get_db), admin: User = Depends(get_platform_admin)):
+    """Use a number already on the Telnyx account instead of ordering one."""
+    return _act(db, line_id, voice_lines.adopt_number, payload.phone_number.strip())
+
+
 @admin_router.post("/lines/{line_id}/sync", response_model=AdminVoiceLineRow)
 def sync(line_id: int, db: Session = Depends(get_db), admin: User = Depends(get_platform_admin)):
     return _act(db, line_id, voice_lines.sync)

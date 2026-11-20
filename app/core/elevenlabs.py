@@ -56,6 +56,23 @@ def _request(method: str, path: str, *, json: dict | None = None, params: dict |
     return body if isinstance(body, dict) else {}
 
 
+def _request_any(method: str, path: str) -> object:
+    """Like _request, for endpoints that answer with a JSON list."""
+    key = api_key()
+    if not key:
+        raise ElevenLabsError("ElevenLabs API key is not set.")
+    try:
+        resp = httpx.request(method, API_BASE + path, timeout=TIMEOUT, headers={"xi-api-key": key, "Accept": "application/json"})
+    except httpx.HTTPError as exc:
+        raise ElevenLabsError(f"Could not reach ElevenLabs ({exc.__class__.__name__}).") from exc
+    if resp.status_code >= 400:
+        raise ElevenLabsError(_error_text(resp), resp.status_code)
+    try:
+        return resp.json()
+    except ValueError:
+        return None
+
+
 def _error_text(resp: httpx.Response) -> str:
     try:
         detail = resp.json().get("detail")
@@ -117,6 +134,16 @@ def import_sip_number(label: str, phone_number: str, agent_id: str | None = None
     if not number_id:
         raise ElevenLabsError("ElevenLabs did not return a phone number id.")
     return number_id
+
+
+def find_phone_number(phone_number: str) -> str | None:
+    """The id of a number already imported into the workspace, if any."""
+    body = _request_any("GET", "/v1/convai/phone-numbers")
+    rows = body if isinstance(body, list) else (body.get("phone_numbers") or []) if isinstance(body, dict) else []
+    for row in rows:
+        if isinstance(row, dict) and row.get("phone_number") == phone_number:
+            return row.get("phone_number_id")
+    return None
 
 
 def assign_agent(phone_number_id: str, agent_id: str) -> None:
